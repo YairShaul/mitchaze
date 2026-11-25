@@ -1,0 +1,791 @@
+<title>מתחזה</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700;800&family=Suez+One&display=swap">
+<style>
+/* Layout: one narrow column held in the hand. Carnival direction: chunky ink outlines, hard offset shadows, sticker avatars.
+   The page ground changes per scene (sun = lobby, night = secret card, mint = clue round, paper = voting/results).
+   Deliberately a single bright look in both OS themes. */
+:root{
+  --ink:#1B0B3A; --ink-muted:#5E5375; --card:#FFFFFF;
+  --sun:#FFD400; --pink:#E6007E; --violet:#5B2EFF; --mint:#00C2A8; --orange:#FF7A00; --sky:#3DA9FC;
+  --bg:var(--sun); --fg:var(--ink); --fg-muted:#4D3F12;
+  --f-display:'Suez One','Rubik',system-ui,sans-serif;
+  --f-body:'Rubik',system-ui,-apple-system,'Segoe UI',Arial,sans-serif;
+  --shadow:5px 5px 0 var(--ink);
+  color-scheme:light;
+}
+html[data-scene="night"]{--bg:var(--violet);--fg:#FFFFFF;--fg-muted:#DCD3FF}
+html[data-scene="mint"]{--bg:var(--mint);--fg:var(--ink);--fg-muted:#0C4840}
+html[data-scene="paper"]{--bg:#FFFFFF;--fg:var(--ink);--fg-muted:var(--ink-muted)}
+*,*::before,*::after{box-sizing:border-box}
+html{background:var(--bg)}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:17px;line-height:1.5;transition:background-color .35s ease}
+#app{max-width:520px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 48px;display:flex;flex-direction:column;gap:18px}
+h1,h2,h3{font-family:var(--f-display);font-weight:400;margin:0;text-wrap:balance;line-height:1.15}
+h1{font-size:3.4rem}
+h2{font-size:1.8rem}
+h3{font-size:1.2rem}
+p{margin:0}
+.muted{color:var(--fg-muted)}
+.panel .muted,.choice .muted,.secret .muted{color:var(--ink-muted)}
+.small{font-size:.9rem}
+.stack{display:flex;flex-direction:column;gap:12px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row>*{min-width:0}
+.center{text-align:center}
+.hero{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding-top:12px}
+.mask{width:104px;color:var(--pink);filter:drop-shadow(4px 4px 0 var(--ink))}
+.mask .hole{fill:var(--bg)}
+.tag{font-size:.8rem;letter-spacing:.06em;font-weight:800;color:var(--fg-muted)}
+.panel{background:var(--card);color:var(--ink);border:3px solid var(--ink);border-radius:20px;padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow)}
+button{font:inherit;color:inherit;cursor:pointer;border:none;background:none}
+button:focus-visible,input:focus-visible{outline:3px solid var(--pink);outline-offset:3px}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px;padding:12px 18px;border-radius:16px;font-weight:800;font-size:1.08rem;background:var(--ink);color:var(--sun);border-bottom:5px solid var(--pink);width:100%;text-align:center;transition:transform .08s}
+.btn:active{transform:translateY(3px);border-bottom-width:2px}
+.btn.alt{background:var(--card);color:var(--ink);border:3px solid var(--ink)}
+.btn.ghost{background:transparent;color:var(--fg);border:none;min-height:44px;font-weight:600;text-decoration:underline;text-underline-offset:3px}
+.btn.ok{background:var(--mint);color:var(--ink);border-bottom-color:var(--ink)}
+.btn[disabled]{opacity:.4;cursor:not-allowed}
+.choice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:start;padding:16px 18px;border-radius:20px;background:var(--card);color:var(--ink);border:3px solid var(--ink);width:100%;box-shadow:var(--shadow);transition:transform .1s,box-shadow .1s}
+.choice b{font-family:var(--f-display);font-weight:400;font-size:1.4rem}
+.choice:hover{transform:translate(-2px,-2px);box-shadow:7px 7px 0 var(--ink)}
+.choice:active{transform:translate(3px,3px);box-shadow:2px 2px 0 var(--ink)}
+input[type=text],input[type=tel]{font:inherit;font-weight:600;width:100%;min-width:0;padding:12px 14px;border-radius:14px;border:3px solid var(--ink);background:#FFFDF3;color:var(--ink)}
+.prow{display:flex;gap:8px;align-items:center}
+.prow input{flex:1}
+.x{width:46px;height:46px;flex:none;border-radius:14px;background:var(--pink);color:#fff;font-size:1.4rem;line-height:1;border:3px solid var(--ink)}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:#F1ECFF;padding:5px;border-radius:16px;border:3px solid var(--ink)}
+.seg button{padding:10px 6px;border-radius:11px;font-weight:800;color:var(--ink-muted)}
+.seg button[aria-pressed=true]{background:var(--ink);color:var(--sun)}
+.seg button[disabled]{opacity:.4;cursor:not-allowed}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:7px 13px;border-radius:999px;background:var(--card);color:var(--ink);font-weight:700;font-size:.95rem;border:2px solid var(--ink)}
+.chip[aria-pressed=true]{background:var(--violet);color:#fff;box-shadow:3px 3px 0 var(--ink)}
+.chip .n{opacity:.7;font-weight:500;font-size:.8rem;margin-inline-start:4px}
+.err{background:var(--pink);color:#fff;font-weight:700;padding:10px 14px;border-radius:14px;border:3px solid var(--ink)}
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-size:.9rem;font-weight:700;color:var(--fg)}
+.topbar .btn.ghost{color:var(--fg)}
+.code{font-family:var(--f-display);font-size:1.1rem;letter-spacing:.15em}
+.bigcode{font-family:var(--f-display);font-size:3rem;letter-spacing:.25em;color:var(--ink);text-align:center;background:var(--sun);border:3px solid var(--ink);border-radius:16px;padding:4px 0}
+
+/* sticker avatars */
+.av{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;font-family:var(--f-display);font-size:1.3rem;background:var(--pc,var(--sun));color:var(--pt,var(--ink));border:3px solid var(--ink)}
+
+/* the secret card: a playing card */
+.secret{position:relative;min-height:300px;margin-inline:auto;max-width:92%;border-radius:22px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;padding:28px 20px;width:100%;border:4px solid var(--ink);box-shadow:8px 8px 0 var(--ink)}
+.secret.back{background:var(--pink);color:#fff;transform:rotate(1.5deg);background-image:radial-gradient(circle at 12px 12px,rgba(255,255,255,.22) 3px,transparent 4px);background-size:28px 28px}
+.secret.back .mask{color:var(--sun)}
+.secret.back .mask .hole{fill:var(--pink)}
+.secret.word,.secret.imp{background:var(--card);color:var(--ink);transform:rotate(-1.5deg)}
+.secret .label{font-size:.85rem;font-weight:800;padding:4px 12px;border-radius:999px;background:var(--sun);color:var(--ink);border:2px solid var(--ink)}
+.secret.imp .label{background:var(--pink);color:#fff}
+.secret .big{font-family:var(--f-display);font-size:clamp(2.4rem,12vw,3.6rem);line-height:1.1;word-break:break-word}
+.secret.imp .big{color:var(--violet)}
+.secret .note{font-size:.95rem;color:var(--ink-muted);max-width:30ch}
+.reveal-in{animation:flip .32s cubic-bezier(.2,1.4,.4,1)}
+@keyframes flip{from{transform:rotate(6deg) scale(.85)}to{transform:rotate(-1.5deg) scale(1)}}
+@media (prefers-reduced-motion:reduce){.reveal-in{animation:none}body{transition:none}.btn,.choice{transition:none}}
+
+.pass{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:6px 0}
+.pass .who{font-family:var(--f-display);font-size:2.6rem;color:var(--fg);word-break:break-word;line-height:1.1}
+
+ol.order{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;counter-reset:o}
+ol.order li{counter-increment:o;display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--card);color:var(--ink);border:3px solid var(--ink);border-radius:18px;font-weight:800;font-size:1.1rem}
+ol.order li::after{content:counter(o);margin-inline-start:auto;font-family:var(--f-display);color:var(--ink-muted)}
+ol.order li:first-child{box-shadow:var(--shadow)}
+ol.order li:first-child::after{content:"מתחיל";font-family:var(--f-body);font-size:.8rem;font-weight:800;background:var(--pink);color:#fff;padding:3px 10px;border-radius:999px}
+
+.targets{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px}
+.target{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:18px;background:var(--card);color:var(--ink);border:3px solid var(--ink);font-weight:800;font-size:1.05rem;word-break:break-word;transition:transform .1s,box-shadow .1s}
+.target .av{width:58px;height:58px;font-size:1.6rem}
+.target[aria-pressed=true]{background:var(--pink);color:#fff;transform:scale(1.05) rotate(-2deg);box-shadow:var(--shadow)}
+
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;background:var(--card);color:var(--ink)}
+th,td{text-align:start;padding:10px 8px;border-bottom:2px solid #EEE8F7}
+th{font-size:.8rem;color:var(--ink-muted);font-weight:800}
+td.num,th.num{text-align:center}
+tr:last-child td{border-bottom:none}
+tr.is-imp td{background:#FFE3F2}
+tr.is-imp td:first-child{font-weight:800;color:var(--pink)}
+.tablewrap{overflow-x:auto;border:3px solid var(--ink);border-radius:18px;box-shadow:var(--shadow)}
+.status{display:flex;flex-wrap:wrap;gap:6px}
+.status span{padding:6px 12px;border-radius:999px;font-size:.9rem;font-weight:700;background:#F1ECFF;color:var(--ink-muted);border:2px solid transparent}
+.status span.done{background:var(--mint);color:var(--ink);border-color:var(--ink)}
+.status button{padding:6px 12px;border-radius:999px;font-size:.9rem;font-weight:700;background:var(--card);color:var(--ink);border:2px dashed var(--ink)}
+.banner{position:relative;overflow:hidden;border-radius:22px;padding:22px 18px;text-align:center;display:flex;flex-direction:column;gap:6px;border:4px solid var(--ink);box-shadow:var(--shadow)}
+.banner.win{background:var(--mint);color:var(--ink)}
+.banner.lose{background:var(--pink);color:#fff}
+.banner h2{font-size:2rem;position:relative}
+.banner .tag,.banner p{color:inherit;position:relative}
+.confetti{position:absolute;inset:0;pointer-events:none}
+.confetti i{position:absolute;width:10px;height:16px;border:2px solid var(--ink);border-radius:2px}
+.confetti i:nth-child(1){top:10%;right:6%;background:var(--sun);transform:rotate(20deg)}
+.confetti i:nth-child(2){top:62%;right:12%;background:var(--violet);transform:rotate(-30deg)}
+.confetti i:nth-child(3){top:18%;left:8%;background:var(--pink);transform:rotate(45deg)}
+.confetti i:nth-child(4){top:70%;left:14%;background:var(--sun);transform:rotate(-12deg)}
+.confetti i:nth-child(5){top:40%;right:22%;background:#fff;transform:rotate(70deg);width:8px;height:8px;border-radius:50%}
+.confetti i:nth-child(6){top:35%;left:24%;background:var(--orange);transform:rotate(-55deg)}
+details{background:var(--card);color:var(--ink);border:3px solid var(--ink);border-radius:20px;padding:14px 18px}
+summary{cursor:pointer;font-weight:800}
+details ul{margin:10px 0 0;padding-inline-start:20px;display:flex;flex-direction:column;gap:6px}
+.countdown{font-family:var(--f-display);font-size:3.2rem;line-height:1;display:block}
+</style>
+
+<div id="app" dir="rtl" lang="he"></div>
+
+<script>const WORDS = /*WORDS*/;</script>
+<script>
+(function(){
+const $app = document.getElementById('app');
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = {
+  get(k, d){ try { const v = localStorage.getItem('imp:' + k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } },
+  set(k, v){ try { localStorage.setItem('imp:' + k, JSON.stringify(v)); } catch(e){} },
+  del(k){ try { localStorage.removeItem('imp:' + k); } catch(e){} }
+};
+const CATS = [];
+const CAT_COUNT = {};
+WORDS.forEach(w => { if (!(w[2] in CAT_COUNT)) { CATS.push(w[2]); CAT_COUNT[w[2]] = 0; } CAT_COUNT[w[2]]++; });
+
+const MASK = '<svg class="mask" viewBox="0 0 64 34" aria-hidden="true"><path fill="currentColor" d="M3 7c9-5 19-4 29 3 10-7 20-8 29-3 2 11-2 21-12 23-8 1-13-3-17-8-4 5-9 9-17 8C5 28 1 18 3 7z"/><ellipse class="hole" cx="19" cy="16" rx="6.5" ry="4.2"/><ellipse class="hole" cx="45" cy="16" rx="6.5" ry="4.2"/></svg>';
+
+const CONFETTI = '<span class="confetti" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>';
+const PCOL = [['#FFD400','#1B0B3A'],['#E6007E','#FFFFFF'],['#00C2A8','#1B0B3A'],['#5B2EFF','#FFFFFF'],['#FF7A00','#1B0B3A'],['#3DA9FC','#1B0B3A']];
+function av(g, p){
+  const c = PCOL[Math.max(0, g.players.indexOf(p)) % PCOL.length];
+  return `<span class="av" style="--pc:${c[0]};--pt:${c[1]}" aria-hidden="true">${esc(Array.from(p)[0] || '?')}</span>`;
+}
+function scene(){
+  if (S.view !== 'game') return 'sun';
+  const g = G();
+  if (!g || (isOnline() && !S.o.myName)) return 'sun';
+  return ({ reveal: 'night', guess: 'night', clues: 'mint', vote: 'paper', result: 'paper', final: 'sun' })[g.phase] || 'paper';
+}
+
+const S = {
+  view: 'home',
+  mode: 'local',
+  setup: Object.assign({ players: ['', '', ''], catMode: 'random', cats: [], mode: 'local', series: 'series', rounds: 10 }, store.get('setup', {})),
+  setupErr: '',
+  mgr: store.get('mgr', false),
+  mgrCode: '', mgrErr: '',
+  local: store.get('localGame', null),
+  reveal: false,
+  vote: { ready: false, pick: null, forPlayer: null },
+  guessShown: false,
+  joinCode: '',
+  myNameInput: store.get('myName', ''),
+  homeErr: '',
+  o: { db: null, ready: false, canWrite: null, myId: null, code: null, game: null, voteDocs: {}, lobby: [], unsubs: [], myName: null, host: false, error: '', loading: false, voteErr: '' }
+};
+
+/* ---------- game logic ---------- */
+function shuffle(a){ a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function pickWord(catMode, cats, used){
+  const pool = [];
+  WORDS.forEach((w, i) => { if (catMode === 'random' || cats.indexOf(w[2]) >= 0) pool.push(i); });
+  let fresh = pool.filter(i => used.indexOf(i) < 0);
+  if (!fresh.length) { fresh = pool; used = used.filter(i => pool.indexOf(i) < 0); }
+  const i = fresh[Math.floor(Math.random() * fresh.length)];
+  return { i, used: used.concat([i]) };
+}
+function newRound(g){
+  const p = pickWord(g.catMode, g.cats, g.used || []);
+  const w = WORDS[p.i];
+  const impostor = g.players[Math.floor(Math.random() * g.players.length)];
+  const order = shuffle(g.players);
+  return Object.assign({}, g, { round: (g.round || 0) + 1, phase: 'reveal', word: w[0], hint: w[1], category: w[2], impostor, order, used: p.used, votes: {}, revealIdx: 0, voteIdx: 0, guessed: null, deltas: null });
+}
+/* outcome: 'caught' = impostor alone at the top, 'tie' = impostor shares the top with others, 'escaped' = impostor not at the top */
+function tally(g){
+  const c = {}; g.players.forEach(p => c[p] = 0);
+  Object.keys(g.votes || {}).forEach(v => { const t = g.votes[v]; if (t in c) c[t]++; });
+  const max = Math.max.apply(null, Object.values(c));
+  const top = Object.keys(c).filter(p => c[p] === max);
+  let outcome = 'escaped';
+  if (max > 0 && top.length > 1 && top.indexOf(g.impostor) >= 0) outcome = 'tie';
+  else if (max > 0 && top[0] === g.impostor) outcome = 'caught';
+  return { c, outcome, caught: outcome === 'caught' };
+}
+function score(g, guessed){
+  const outcome = tally(g).outcome;
+  const d = {}; g.players.forEach(p => d[p] = 0);
+  if (outcome === 'caught') {
+    Object.keys(g.votes || {}).forEach(v => { if (v !== g.impostor && g.votes[v] === g.impostor && v in d) d[v] += 1; });
+    if (guessed) d[g.impostor] += 1;
+  } else if (outcome === 'tie') d[g.impostor] += 1;
+  else d[g.impostor] += 2;
+  const scores = Object.assign({}, g.scores);
+  Object.keys(d).forEach(p => scores[p] = (scores[p] || 0) + d[p]);
+  return { deltas: d, scores };
+}
+function finishVoting(g){
+  if (tally(g).caught) return Object.assign({}, g, { phase: 'guess' });
+  return Object.assign({}, g, { phase: 'result', guessed: null, resultAt: Date.now() }, score(g, false));
+}
+function resolveGuess(g, ok){ return Object.assign({}, g, { phase: 'result', guessed: ok, resultAt: Date.now() }, score(g, ok)); }
+function isSeries(g){ return !!(g && g.totalRounds > 0); }
+function advanceSeries(g){ return g.round >= g.totalRounds ? Object.assign({}, g, { phase: 'final' }) : newRound(g); }
+const PAUSE_MS = 10000;
+const MGR_HASH = '1ccb468a6f45216deae3646f92d0ba381494c1bd85b691701f9c13e45a9b17f0';
+async function checkMgr(code){
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('imp-mgr:' + code.trim()));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('') === MGR_HASH;
+  } catch(e) { return false; }
+}
+
+/* ---------- state plumbing ---------- */
+function isOnline(){ return S.mode === 'online'; }
+function G(){ return isOnline() ? S.o.game : S.local; }
+function isHost(){
+  if (!isOnline()) return true;
+  const g = S.o.game;
+  return S.o.host || !!(g && S.o.myId && g.hostId === S.o.myId);
+}
+function resetEphemeral(){ S.reveal = false; S.vote = { ready: false, pick: null, forPlayer: null }; S.guessShown = false; S.o.voteErr = ''; }
+let writing = Promise.resolve();
+function commit(g){
+  const prev = G();
+  if (!prev || prev.phase !== g.phase || prev.round !== g.round) resetEphemeral();
+  if (isOnline()) {
+    S.o.game = g; syncMe(); render();
+    const ref = S.o.db.doc('games/' + S.o.code);
+    writing = writing.then(() => ref.set(g)).catch(e => { S.o.error = 'השמירה נכשלה (' + ((e && e.code) || 'שגיאה') + '). נסו שוב.'; render(); });
+  } else {
+    S.local = g; store.set('localGame', g); render();
+  }
+}
+function saveSession(){ store.set('onlineSession', { code: S.o.code, host: S.o.host }); }
+let PID = store.get('pid', null);
+if (!PID) { PID = 'p' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); store.set('pid', PID); }
+function syncMe(){ const g = S.o.game; S.o.myName = (g && g.pids && g.pids[PID]) || null; }
+function myTypedName(){ return (S.myNameInput || '').trim().slice(0, 20); }
+function joinLobby(code){
+  const name = myTypedName();
+  return S.o.db.doc('games/' + code + '/players/' + PID).set({ name, at: Date.now() }).catch(e => {
+    S.o.error = (e && e.code === 'invalid_argument')
+      ? 'אין לך הרשאה להצטרף מהטלפון הזה. בקשו ממי שפתח את העמוד לשתף אותו איתכם עם הרשאת עריכה.'
+      : 'ההצטרפות נכשלה. נסו שוב.';
+    render();
+  });
+}
+function lobbyNames(){
+  const used = {}; const pids = {}; const players = [];
+  S.o.lobby.forEach(p => {
+    let n = (p.name || 'שחקן').trim() || 'שחקן';
+    if (used[n]) { let k = 2; while (used[n + ' ' + k]) k++; n = n + ' ' + k; }
+    used[n] = true; pids[p.pid] = n; players.push(n);
+  });
+  return { players, pids };
+}
+
+function unsubAll(){ S.o.unsubs.forEach(u => { try { u(); } catch(e){} }); S.o.unsubs = []; }
+function subscribe(code){
+  unsubAll();
+  const o = S.o;
+  o.code = code; o.game = null; o.voteDocs = {}; o.loading = true; o.error = '';
+  const timer = setTimeout(() => { if (o.loading) { o.error = 'לא מצליחים להגיע למשחק כרגע. בדקו שהקוד נכון, שיש אינטרנט, ושהמשחק פתוח בטלפון של המנהל.'; render(); } }, 10000);
+  o.unsubs.push(o.db.doc('games/' + code).onSnapshot(snap => {
+    if (!snap.exists) {
+      if (!snap.metadata.fromCache) { clearTimeout(timer); o.loading = false; o.game = null; o.error = 'לא נמצא משחק עם הקוד ' + code + '.'; render(); }
+      return;
+    }
+    clearTimeout(timer); o.loading = false; o.error = '';
+    const g = snap.data();
+    if (!o.game || o.game.round !== g.round || o.game.phase !== g.phase) resetEphemeral();
+    o.game = g; syncMe(); render();
+  }, e => { clearTimeout(timer); o.loading = false; o.error = 'החיבור למשחק נקטע. רעננו את הדף כדי להתחבר שוב.'; render(); }));
+  o.unsubs.push(o.db.collection('games/' + code + '/votes').onSnapshot(snap => {
+    const v = {}; snap.docs.forEach(d => { const x = d.data(); if (x) v[d.id] = x; });
+    o.voteDocs = v; render();
+  }, () => {}));
+  o.unsubs.push(o.db.collection('games/' + code + '/players').onSnapshot(snap => {
+    o.lobby = snap.docs.map(d => { const x = d.data() || {}; return { pid: d.id, name: String(x.name || ''), at: +x.at || 0 }; })
+      .filter(p => p.name).sort((a, b) => a.at - b.at);
+    render();
+  }, () => {}));
+}
+function onlineVotes(g){
+  const out = {};
+  Object.keys(S.o.voteDocs).forEach(id => { const x = S.o.voteDocs[id]; if (x.round === g.round && g.players.indexOf(x.voter) >= 0) out[x.voter] = x.target; });
+  return out;
+}
+function castOnlineVote(voter, target){
+  const g = S.o.game; const idx = g.players.indexOf(voter);
+  const ref = S.o.db.doc('games/' + S.o.code + '/votes/r' + g.round + 'p' + idx);
+  S.o.voteErr = '';
+  const local = Object.assign({}, S.o.voteDocs); local['r' + g.round + 'p' + idx] = { round: g.round, voter, target };
+  S.o.voteDocs = local; S.vote = { ready: false, pick: null, forPlayer: null }; render();
+  ref.set({ round: g.round, voter, target }).catch(e => {
+    const l2 = Object.assign({}, S.o.voteDocs); delete l2['r' + g.round + 'p' + idx]; S.o.voteDocs = l2;
+    S.o.voteErr = (e && e.code === 'invalid_argument')
+      ? 'אין לטלפון הזה הרשאה לשמור הצבעה. אמרו למארח בשקט במי בחרתם, והוא יקליד את ההצבעה בשבילכם.'
+      : 'ההצבעה לא נשמרה. נסו שוב.';
+    render();
+  });
+}
+
+/* ---------- views ---------- */
+function vHome(){
+  const o = S.o; const lg = S.local;
+  let join;
+  if (!o.ready) join = '<p class="muted small">בודקים אם אפשר להצטרף ממכשיר אחר…</p>';
+  else if (!o.db) join = (window.IS_WEB
+    ? '<p class="muted small">כדי להצטרף למשחק מהטלפון שלך צריך חיבור לאינטרנט.</p>'
+    : '<p class="muted small">כדי להצטרף למשחק מהטלפון שלך צריך לפתוח את העמוד כשמחוברים לחשבון claude.ai.</p>');
+  else join = '<button class="choice" data-a="online-join"><b>הצטרפות למשחק</b><span class="muted small">המנהל פתח משחק? הקלידו את הקוד שמופיע אצלו.</span></button>';
+  return `
+  <div class="hero">${MASK}<h1>מתחזה</h1><p class="muted">כולם יודעים את המילה. חוץ מאחד.</p></div>
+  <div class="panel">
+    <label for="myname" style="font-weight:800">איך קוראים לך?</label>
+    <input type="text" id="myname" data-in="myname" value="${esc(S.myNameInput)}" placeholder="השם שלך במשחק" maxlength="20" autocomplete="nickname">
+    ${S.homeErr ? `<p class="err">${esc(S.homeErr)}</p>` : ''}
+  </div>
+  ${lg && lg.phase && S.mgr ? `<button class="btn" data-a="continue-local">המשך את המשחק בטלפון הזה</button>` : ''}
+  <section class="stack">
+    <span class="tag">שחקנים</span>
+    ${join}
+  </section>
+  <section class="stack">
+    <span class="tag">מנהל המשחק</span>
+    <button class="choice" data-a="open"><b>פתיחת משחק</b><span class="muted small">${S.mgr ? 'מצב מנהל פעיל בטלפון הזה.' : 'נדרש קוד מנהל.'}</span></button>
+    ${S.mgr ? '<button class="btn ghost" data-a="mgr-off">יציאה ממצב מנהל בטלפון הזה</button>' : ''}
+  </section>
+  <details>
+    <summary>איך משחקים ואיך סופרים נקודות</summary>
+    <ul>
+      <li>כל השחקנים מקבלים את אותה מילה סודית. שחקן אחד הוא המתחזה ומקבל רק רמז למילה.</li>
+      <li>לפי הסדר, כל אחד אומר מילה אחת שקשורה למילה הסודית. לא ברורה מדי, כדי שהמתחזה לא יבין מה המילה.</li>
+      <li>בסוף כל אחד מצביע בסוד מי לדעתו המתחזה.</li>
+      <li>ניקוד יש רק בסדרת משחקים. במשחק בודד אין ניקוד.</li>
+      <li>המתחזה נתפס (קיבל הכי הרבה קולות לבד): כל מי שהצביע נגדו מקבל נקודה. אם הוא גם ניחש את המילה, גם הוא מקבל נקודה.</li>
+      <li>תיקו בהצבעה שהמתחזה חלק ממנו: רק המתחזה מקבל נקודה.</li>
+      <li>המתחזה לא נתפס (כולל תיקו בין שחקנים אחרים): הוא מקבל 2 נקודות.</li>
+    </ul>
+  </details>`;
+}
+
+function vMgr(){
+  return `
+  <div class="topbar"><button class="btn ghost" style="width:auto" data-a="home">→ חזרה</button></div>
+  <div class="hero">${MASK}<h2>קוד מנהל</h2><p class="muted">רק מנהל המשחק יכול לפתוח משחק.</p></div>
+  <div class="panel">
+    <input type="tel" id="mgrcode" data-in="mgr" inputmode="numeric" maxlength="12" placeholder="קוד מנהל" value="${esc(S.mgrCode)}" style="text-align:center;font-size:1.6rem;letter-spacing:.3em" autocomplete="off">
+    ${S.mgrErr ? `<p class="err">${esc(S.mgrErr)}</p>` : ''}
+    <button class="btn" data-a="mgr-go">כניסה</button>
+  </div>`;
+}
+
+function vSetup(){
+  const st = S.setup; const o = S.o;
+  const onlineOk = o.ready && o.db && o.canWrite !== false;
+  if (st.mode === 'online' && !onlineOk) st.mode = 'local';
+  const on = st.mode === 'online';
+  const ROUNDS = [3, 5, 7, 10, 15, 20];
+  const rows = st.players.map((p, i) => `
+    <div class="prow"><input type="text" id="p${i}" data-in="player" data-i="${i}" value="${esc(p)}" placeholder="שחקן ${i + 1}" maxlength="20" autocomplete="off">
+    ${st.players.length > 3 ? `<button class="x" data-a="del-player" data-i="${i}" aria-label="הסרת שחקן">×</button>` : ''}</div>`).join('');
+  const chips = CATS.map(c => `<button class="chip" data-a="toggle-cat" data-c="${esc(c)}" aria-pressed="${st.cats.indexOf(c) >= 0}">${esc(c)}<span class="n">${CAT_COUNT[c]}</span></button>`).join('');
+  return `
+  <div class="topbar"><button class="btn ghost" style="width:auto" data-a="home">→ חזרה</button><span>פתיחת משחק</span></div>
+  <h2>איך משחקים?</h2>
+  <div class="panel">
+    <div class="seg" role="group" aria-label="מכשירים">
+      <button data-a="set-mode" data-v="local" aria-pressed="${!on}">טלפון אחד</button>
+      <button data-a="set-mode" data-v="online" aria-pressed="${on}" ${onlineOk ? '' : 'disabled'}>כל אחד מהטלפון שלו</button>
+    </div>
+    <p class="muted small">${on ? 'תקבלו קוד, וכל שחקן יצטרף איתו מהטלפון שלו.' : (onlineOk ? 'מעבירים את הטלפון מיד ליד.' : (window.IS_WEB ? 'מעבירים את הטלפון מיד ליד. משחק מכמה טלפונים דורש חיבור לאינטרנט.' : 'מעבירים את הטלפון מיד ליד. משחק מכמה טלפונים דורש חיבור לחשבון claude.ai עם הרשאת עריכה לעמוד.'))}</p>
+    <div class="seg" role="group" aria-label="סדרה">
+      <button data-a="set-series" data-v="single" aria-pressed="${st.series === 'single'}">משחק בודד</button>
+      <button data-a="set-series" data-v="series" aria-pressed="${st.series === 'series'}">סדרה עם ניקוד</button>
+    </div>
+    ${st.series === 'series'
+      ? `<p class="muted small">כמה סבבים בסדרה? בין סבב לסבב יש הפסקה של 10 שניות, וטבלת הניקוד מוצגת רק בסוף.</p>
+         <div class="chips">${ROUNDS.map(n => `<button class="chip" data-a="set-rounds" data-v="${n}" aria-pressed="${st.rounds === n}">${n} סבבים</button>`).join('')}</div>`
+      : '<p class="muted small">סבב אחד בכל פעם, בלי ניקוד.</p>'}
+  </div>
+  ${on ? `<h2>השם שלך</h2>
+  <div class="panel">
+    <input type="text" id="myname" data-in="myname" value="${esc(S.myNameInput)}" placeholder="השם שלך במשחק" maxlength="20" autocomplete="nickname">
+    <p class="muted small">גם את/ה משחק/ת. שאר השחקנים יכתבו את השם שלהם בטלפון שלהם כשיצטרפו עם הקוד.</p>
+  </div>` : `<h2>מי משחק?</h2>
+  <div class="panel">
+    <div class="stack">${rows}</div>
+    ${st.players.length < 20 ? '<button class="btn alt" data-a="add-player">+ הוספת שחקן</button>' : ''}
+  </div>`}
+  <h2>מאיפה המילים?</h2>
+  <div class="panel">
+    <div class="seg" role="group" aria-label="בחירת מילים">
+      <button data-a="cat-mode" data-v="random" aria-pressed="${st.catMode === 'random'}">אקראי מהכול</button>
+      <button data-a="cat-mode" data-v="pick" aria-pressed="${st.catMode === 'pick'}">לפי קטגוריות</button>
+    </div>
+    ${st.catMode === 'pick' ? `<p class="muted small">אפשר לבחור כמה קטגוריות. המילה תוגרל מתוכן.</p><div class="chips">${chips}</div>` : `<p class="muted small">המילה תוגרל מכל ${WORDS.length} המילים, בלי חזרות עד שנגמרות.</p>`}
+  </div>
+  ${S.setupErr ? `<p class="err">${esc(S.setupErr)}</p>` : ''}
+  <button class="btn" data-a="start">${on ? 'פתיחת המשחק וקבלת קוד' : 'מתחילים'}</button>`;
+}
+
+function vJoin(){
+  return `
+  <div class="topbar"><button class="btn ghost" style="width:auto" data-a="home">→ חזרה</button></div>
+  <div class="hero">${MASK}<h2>הצטרפות למשחק</h2><p class="muted">מצטרפים בתור <b>${esc(myTypedName())}</b>. הקלידו את הקוד שמופיע אצל המנהל.</p></div>
+  <div class="panel">
+    <input type="tel" id="joincode" data-in="code" inputmode="numeric" maxlength="4" placeholder="4 ספרות" value="${esc(S.joinCode)}" style="text-align:center;font-size:1.6rem;letter-spacing:.3em">
+    ${S.o.error ? `<p class="err">${esc(S.o.error)}</p>` : ''}
+    <button class="btn" data-a="join-go">הצטרפות</button>
+  </div>`;
+}
+
+function topbar(g){
+  const on = isOnline();
+  return `<div class="topbar">
+    <span>${isSeries(g) ? `סבב ${esc(Math.min(g.round, g.totalRounds))} מתוך ${esc(g.totalRounds)}` : 'משחק בודד'}${on ? ` · קוד <span class="code">${esc(S.o.code)}</span>` : ''}</span>
+    <span>${on && S.o.myName ? `את/ה: <b>${esc(S.o.myName)}</b> · ` : ''}<button class="btn ghost" style="width:auto;min-height:32px;padding:4px 6px;display:inline-flex" data-a="leave">יציאה</button></span>
+  </div>`;
+}
+
+function secretCard(g, name){
+  if (!S.reveal) return `<button class="secret back" data-a="reveal" aria-label="הצגת הכרטיס שלי">${MASK}<span style="font-weight:700;font-size:1.1rem">לחצו כדי לראות</span><span class="small" style="opacity:.8">ודאו שאף אחד לא מציץ</span></button>`;
+  if (name === g.impostor) return `<div class="secret imp reveal-in" role="status">
+    <span class="label">אתה המתחזה</span><span class="note">הרמז שלך:</span><span class="big">${esc(g.hint)}</span>
+    <span class="note">תגידו מילה שנשמעת בטוחה, ונסו להבין מהאחרים מה המילה.</span></div>`;
+  return `<div class="secret word reveal-in" role="status">
+    <span class="label">המילה הסודית</span><span class="big">${esc(g.word)}</span>
+    <span class="note">תגידו מילה קשורה, אבל לא ברורה מדי, כדי שהמתחזה לא יבין.</span></div>`;
+}
+
+function vReveal(g){
+  if (isOnline()) {
+    const me = S.o.myName;
+    return `<h2>הכרטיס שלך</h2>${secretCard(g, me)}
+      ${S.reveal ? '<button class="btn alt" data-a="hide">הסתרה</button>' : ''}
+      ${isHost() ? `<div class="panel"><p class="small muted">כשכולם ראו את הכרטיס שלהם:</p><button class="btn" data-a="to-clues">מתחילים סבב מילים</button></div>`
+                 : '<p class="muted center small">המארח יתחיל את סבב המילים כשכולם מוכנים.</p>'}`;
+  }
+  const name = g.players[g.revealIdx];
+  const last = g.revealIdx === g.players.length - 1;
+  if (!S.reveal) return `<div class="pass"><span class="tag">שחקן ${g.revealIdx + 1} מתוך ${g.players.length}</span><span class="muted">העבירו את הטלפון ל</span><span class="who">${esc(name)}</span></div>${secretCard(g, name)}`;
+  return `<div class="pass"><span class="who" style="font-size:1.6rem">${esc(name)}</span></div>${secretCard(g, name)}
+    <button class="btn" data-a="reveal-next">${last ? 'הסתרה ומעבר לסבב המילים' : 'הסתרה והעברה הלאה'}</button>`;
+}
+
+function vClues(g){
+  const host = isHost();
+  return `<h2>סבב מילים</h2>
+    <p class="muted">כל אחד אומר בקול מילה אחת שקשורה למילה הסודית, לפי הסדר. אפשר לעשות יותר מסיבוב אחד.</p>
+    <ol class="order">${g.order.map(p => `<li>${av(g, p)}<span>${esc(p)}</span></li>`).join('')}</ol>
+    ${isOnline() ? `<details><summary>להציץ שוב בכרטיס שלי</summary><div style="margin-top:12px">${secretCard(g, S.o.myName)}</div>${S.reveal ? '<button class="btn alt" style="margin-top:10px" data-a="hide">הסתרה</button>' : ''}</details>` : ''}
+    ${host ? '<button class="btn" data-a="to-vote">עוברים להצבעה</button>' : '<p class="muted center small">המארח יעביר להצבעה בסוף הסבב.</p>'}`;
+}
+
+function targetsPicker(g, voter){
+  const opts = g.players.filter(p => p !== voter).map(p => `<button class="target" data-a="vote-pick" data-p="${esc(p)}" aria-pressed="${S.vote.pick === p}">${av(g, p)}<span>${esc(p)}</span></button>`).join('');
+  return `<div class="targets">${opts}</div>
+    <button class="btn" data-a="vote-confirm" ${S.vote.pick ? '' : 'disabled'}>${S.vote.pick ? 'מצביעים נגד ' + esc(S.vote.pick) : 'בחרו מישהו'}</button>`;
+}
+
+function vVote(g){
+  if (!isOnline()) {
+    const voter = g.players[g.voteIdx];
+    if (!S.vote.ready) return `<h2>הצבעה סודית</h2>
+      <div class="pass"><span class="tag">מצביע ${g.voteIdx + 1} מתוך ${g.players.length}</span><span class="muted">העבירו את הטלפון ל</span><span class="who">${esc(voter)}</span></div>
+      <button class="btn" data-a="vote-ready">אני ${esc(voter)}, אני מוכן/ה להצביע</button>`;
+    return `<h2>${esc(voter)}, מי המתחזה?</h2>${targetsPicker(g, voter)}`;
+  }
+  const votes = onlineVotes(g); const me = S.o.myName; const host = isHost();
+  const doneCount = g.players.filter(p => p in votes).length;
+  let mine;
+  if (S.vote.forPlayer) mine = `<div class="panel"><h3>הצבעה בשם ${esc(S.vote.forPlayer)}</h3>${targetsPicker(g, S.vote.forPlayer)}<button class="btn ghost" data-a="vote-cancel">ביטול</button></div>`;
+  else if ((me in votes) && !S.vote.changing) mine = `<div class="panel center"><h3>ההצבעה שלך נקלטה</h3><p class="muted small">הצבעת נגד ${esc(votes[me])}. אפשר לשנות עד שהמארח חושף את התוצאות.</p><button class="btn alt" data-a="vote-change">שינוי הצבעה</button></div>`;
+  else mine = `<h2>מי המתחזה?</h2>${targetsPicker(g, me)}`;
+  const status = `<div class="status">${g.players.map(p => (p in votes) ? `<span class="done">${esc(p)} ✓</span>` : (host && p !== me ? `<button data-a="vote-for" data-p="${esc(p)}">${esc(p)}: הצבעה בשמו</button>` : `<span>${esc(p)}</span>`)).join('')}</div>`;
+  return `${mine}
+    ${S.o.voteErr ? `<p class="err">${esc(S.o.voteErr)}</p>` : ''}
+    <div class="panel"><h3>הצביעו ${doneCount} מתוך ${g.players.length}</h3>${status}
+    ${host ? `<p class="muted small">שחקן שלא יכול להצביע מהטלפון שלו? לחצו על השם שלו והצביעו בשבילו.</p>
+      <button class="btn" data-a="reveal-votes" ${doneCount ? '' : 'disabled'}>${doneCount === g.players.length ? 'חשיפת התוצאות' : 'חשיפת התוצאות בלי כולם'}</button>` : ''}</div>`;
+}
+
+function vGuess(g){
+  const host = isHost();
+  return `<div class="banner win"><span class="tag" style="color:inherit;opacity:.85">נתפס!</span><h2>${esc(g.impostor)} הוא המתחזה</h2><p>יש לו ניחוש אחד: מה המילה הסודית?</p></div>
+    ${votesTable(g, false)}
+    ${host ? (S.guessShown
+      ? `<div class="secret word reveal-in" style="min-height:0"><span class="label">המילה הייתה</span><span class="big">${esc(g.word)}</span></div>
+         <div class="row"><button class="btn ok" style="flex:1" data-a="guess" data-v="1">ניחש נכון</button><button class="btn alt" style="flex:1" data-a="guess" data-v="0">טעה</button></div>`
+      : `<p class="muted center">קודם ${esc(g.impostor)} אומר את הניחוש בקול, ואז חושפים.</p><button class="btn" data-a="guess-show">חשיפת המילה</button>`)
+      : '<p class="muted center">המארח יחשוף את המילה ויסמן אם הניחוש נכון.</p>'}`;
+}
+
+function votesTable(g, withDelta){
+  const t = tally(g).c;
+  const rows = g.players.slice().sort((a, b) => t[b] - t[a]).map(p => `
+    <tr class="${p === g.impostor && (withDelta || g.phase === 'guess') ? 'is-imp' : ''}"><td>${esc(p)}</td><td class="num">${t[p]}</td><td>${esc((g.votes || {})[p] || '—')}</td></tr>`).join('');
+  return `<div class="tablewrap"><table><thead><tr><th>שחקן</th><th class="num">קולות נגדו</th><th>הצביע נגד</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function vResult(g){
+  const host = isHost(); const outcome = tally(g).outcome;
+  const tag = t => `<span class="tag" style="color:inherit;opacity:.85">${t}</span>`;
+  let head;
+  if (outcome === 'caught' && g.guessed) head = `<div class="banner lose">${tag('נתפס, אבל ניחש')}<h2>${esc(g.impostor)} ניחש את המילה</h2></div>`;
+  else if (outcome === 'caught') head = `<div class="banner win">${CONFETTI}${tag('תפסתם אותו')}<h2>${esc(g.impostor)} היה המתחזה</h2></div>`;
+  else if (outcome === 'tie') head = `<div class="banner lose">${tag('תיקו בהצבעה')}<h2>${esc(g.impostor)} היה המתחזה</h2></div>`;
+  else head = `<div class="banner lose">${tag('המתחזה ניצח')}<h2>${esc(g.impostor)} הצליח להתחבא</h2></div>`;
+  let foot;
+  if (isSeries(g)) {
+    const last = g.round >= g.totalRounds;
+    foot = `<div class="panel center"><p>${last ? 'התוצאות הסופיות בעוד' : 'הסבב הבא מתחיל בעוד'} <b class="countdown" data-countdown>${Math.max(0, Math.ceil((g.resultAt + PAUSE_MS - Date.now()) / 1000))}</b> שניות</p>
+      ${host ? `<button class="btn alt" data-a="advance">${last ? 'לתוצאות הסופיות עכשיו' : 'לסבב הבא עכשיו'}</button>` : ''}</div>`;
+  } else {
+    foot = host ? `<button class="btn" data-a="next-round">משחק נוסף</button><button class="btn alt" data-a="new-game">שינוי הגדרות</button>` : '<p class="muted center small">המנהל יפתח את המשחק הבא.</p>';
+  }
+  return `${head}
+    <div class="panel"><div class="row" style="justify-content:space-between"><span><span class="muted small">המילה</span><br><b style="font-family:var(--f-display);font-size:1.5rem;font-weight:400">${esc(g.word)}</b></span><span><span class="muted small">הרמז של המתחזה</span><br><b style="font-family:var(--f-display);font-size:1.5rem;font-weight:400">${esc(g.hint)}</b></span><span><span class="muted small">קטגוריה</span><br><b>${esc(g.category)}</b></span></div></div>
+    <h3>ההצבעות</h3>${votesTable(g, true)}
+    ${foot}`;
+}
+
+function vFinal(g){
+  const host = isHost();
+  const sorted = g.players.slice().sort((a, b) => (g.scores[b] || 0) - (g.scores[a] || 0));
+  const top = g.scores[sorted[0]] || 0;
+  const winners = sorted.filter(p => (g.scores[p] || 0) === top);
+  const sb = sorted.map(p => `<tr class="${winners.indexOf(p) >= 0 ? 'is-imp' : ''}"><td>${esc(p)}</td><td class="num"><b>${g.scores[p] || 0}</b></td></tr>`).join('');
+  return `<div class="banner win">${CONFETTI}<span class="tag" style="color:inherit;opacity:.85">הסדרה הסתיימה · ${esc(g.totalRounds)} סבבים</span>
+      <h2>${winners.length > 1 ? 'תיקו בין ' + winners.map(esc).join(' ו') : esc(winners[0]) + ' ניצח'}</h2><p>${top} נקודות</p></div>
+    <h3>טבלת ניקוד</h3><div class="tablewrap"><table><thead><tr><th>שחקן</th><th class="num">נקודות</th></tr></thead><tbody>${sb}</tbody></table></div>
+    ${host ? '<button class="btn" data-a="replay-series">סדרה חדשה עם אותם שחקנים</button><button class="btn alt" data-a="new-game">שינוי הגדרות</button>' : '<p class="muted center small">המנהל יכול לפתוח סדרה חדשה.</p>'}`;
+}
+
+function vLobby(g){
+  const host = isHost();
+  const names = lobbyNames().players;
+  const fake = { players: names };
+  const inLobby = S.o.lobby.some(p => p.pid === PID);
+  return `<div class="topbar"><span>${isSeries(g) ? `סדרה של ${esc(g.totalRounds)} סבבים` : 'משחק בודד'}</span><button class="btn ghost" style="width:auto" data-a="leave">יציאה</button></div>
+    <div class="panel center"><p class="muted small">קוד ההצטרפות</p><div class="bigcode">${esc(S.o.code)}</div>
+      <p class="muted small">כל שחקן פותח את העמוד בטלפון שלו, כותב את השם שלו ומקליד את הקוד.</p></div>
+    <h2>מי כבר כאן (${names.length})</h2>
+    ${names.length ? `<div class="targets">${names.map(n => `<div class="target">${av(fake, n)}<span>${esc(n)}</span></div>`).join('')}</div>` : '<p class="muted">עוד אף אחד לא הצטרף.</p>'}
+    ${!inLobby && !S.o.error ? '<p class="muted small center">מצטרפים…</p>' : ''}
+    ${host ? `<button class="btn" data-a="lobby-start" ${names.length >= 3 ? '' : 'disabled'}>${names.length >= 3 ? 'כולם כאן, מתחילים' : 'צריך לפחות 3 שחקנים'}</button>`
+           : '<p class="muted center">מחכים שהמנהל יתחיל את המשחק.</p>'}`;
+}
+
+function vPickName(g){
+  return `<div class="topbar"><span>קוד <span class="code">${esc(S.o.code)}</span></span><button class="btn ghost" style="width:auto" data-a="leave">יציאה</button></div>
+    ${isHost() ? `<div class="panel center"><p class="muted small">זה הקוד שהשחקנים צריכים להקליד:</p><div class="bigcode">${esc(S.o.code)}</div></div>` : ''}
+    <h2>מי את/ה?</h2><p class="muted">בחרו את השם שלכם כדי לקבל את הכרטיס שלכם.</p>
+    <div class="targets">${g.players.map(p => `<button class="target" data-a="pick-name" data-p="${esc(p)}">${av(g, p)}<span>${esc(p)}</span></button>`).join('')}</div>`;
+}
+
+function vGame(){
+  const on = isOnline();
+  if (on) {
+    const o = S.o;
+    if (!o.game) {
+      return `<div class="hero">${MASK}<h2>${o.error ? 'אין חיבור למשחק' : 'מתחברים למשחק…'}</h2>${o.error ? `<p class="err">${esc(o.error)}</p>` : ''}</div>
+        <button class="btn alt" data-a="leave">חזרה למסך הראשי</button>`;
+    }
+    if (o.game.phase === 'lobby') return vLobby(o.game) + (o.error ? `<p class="err">${esc(o.error)}</p>` : '');
+    if (!o.myName) return `<div class="hero">${MASK}<h2>המשחק כבר התחיל</h2><p class="muted">המנהל התחיל לפני שהספקת להצטרף. בקשו ממנו לפתוח משחק חדש.</p></div>
+        <button class="btn alt" data-a="leave">חזרה למסך הראשי</button>`;
+  }
+  const g = G();
+  if (!g) { S.view = 'home'; return vHome(); }
+  let body = '';
+  if (g.phase === 'reveal') body = vReveal(g);
+  else if (g.phase === 'clues') body = vClues(g);
+  else if (g.phase === 'vote') body = vVote(g);
+  else if (g.phase === 'guess') body = vGuess(g);
+  else if (g.phase === 'final') body = vFinal(g);
+  else body = vResult(g);
+  const hostCode = on && isHost() && g.phase === 'reveal' ? `<div class="panel center"><p class="muted small">קוד ההצטרפות לשחקנים</p><div class="bigcode">${esc(S.o.code)}</div></div>` : '';
+  return topbar(g) + hostCode + body + (on && S.o.error ? `<p class="err">${esc(S.o.error)}</p>` : '');
+}
+
+function render(){
+  let h;
+  if (S.view === 'setup') h = vSetup();
+  else if (S.view === 'join') h = vJoin();
+  else if (S.view === 'mgr') h = vMgr();
+  else if (S.view === 'game') h = vGame();
+  else h = vHome();
+  $app.innerHTML = h;
+  document.documentElement.dataset.scene = scene();
+}
+
+/* ---------- actions ---------- */
+function startGame(){
+  const st = S.setup;
+  const online = st.mode === 'online';
+  const names = st.players.map(p => p.trim()).filter(Boolean);
+  if (online) {
+    if (!myTypedName()) { S.setupErr = 'כתבו את השם שלכם.'; return render(); }
+  } else {
+    if (names.length < 3) { S.setupErr = 'צריך לפחות 3 שחקנים עם שם.'; return render(); }
+    if (new Set(names).size !== names.length) { S.setupErr = 'יש שני שחקנים עם אותו שם. שנו אחד מהם.'; return render(); }
+  }
+  if (st.catMode === 'pick' && !st.cats.length) { S.setupErr = 'בחרו לפחות קטגוריה אחת.'; return render(); }
+  S.setupErr = '';
+  S.mode = online ? 'online' : 'local';
+  const base = { players: [], scores: {}, catMode: st.catMode, cats: st.cats.slice(), used: [], round: 0, totalRounds: st.series === 'series' ? st.rounds : 0 };
+  resetEphemeral();
+  if (!online) {
+    base.players = names; names.forEach(n => base.scores[n] = 0);
+    S.view = 'game'; commit(newRound(base)); return;
+  }
+  const code = String(1000 + Math.floor(Math.random() * 9000));
+  base.hostId = S.o.myId || null;
+  base.phase = 'lobby';
+  S.o.host = true; S.o.myName = null; S.o.code = code; saveSession();
+  if (S.o.db.hostRoom) S.o.db.hostRoom(code);
+  subscribe(code);
+  S.view = 'game';
+  commit(base);
+  writing = writing.then(() => joinLobby(code));
+}
+function startFromLobby(){
+  const g = G(); const ln = lobbyNames();
+  if (ln.players.length < 3) return;
+  const scores = {}; ln.players.forEach(n => scores[n] = 0);
+  commit(newRound(Object.assign({}, g, { players: ln.players, pids: ln.pids, scores, round: 0 })));
+}
+
+const A = {
+  home(){ S.view = 'home'; S.setupErr = ''; S.o.error = ''; render(); },
+  open(){ S.view = S.mgr ? 'setup' : 'mgr'; S.mgrErr = ''; render(); if (!S.mgr) setTimeout(() => { const i = document.getElementById('mgrcode'); if (i) i.focus(); }, 0); },
+  async 'mgr-go'(){
+    if (await checkMgr(S.mgrCode)) { S.mgr = true; store.set('mgr', true); S.mgrCode = ''; S.mgrErr = ''; S.view = 'setup'; }
+    else S.mgrErr = 'הקוד לא נכון.';
+    render();
+  },
+  'mgr-off'(){ S.mgr = false; store.del('mgr'); render(); },
+  'set-mode'(el){ S.setup.mode = el.dataset.v; store.set('setup', S.setup); render(); },
+  'set-series'(el){ S.setup.series = el.dataset.v; store.set('setup', S.setup); render(); },
+  'set-rounds'(el){ S.setup.rounds = +el.dataset.v; store.set('setup', S.setup); render(); },
+  advance(){ const g = G(); if (g && g.phase === 'result' && isSeries(g)) commit(advanceSeries(g)); },
+  'replay-series'(){
+    const g = G(); const scores = {}; g.players.forEach(p => scores[p] = 0);
+    commit(newRound(Object.assign({}, g, { scores, round: 0 })));
+  },
+  'continue-local'(){ S.mode = 'local'; S.view = 'game'; resetEphemeral(); render(); },
+  'lobby-start': startFromLobby,
+  'online-join'(){
+    if (!myTypedName()) { S.homeErr = 'כתבו קודם את השם שלכם.'; render(); const i = document.getElementById('myname'); if (i) i.focus(); return; }
+    S.homeErr = ''; S.mode = 'online'; S.o.error = ''; S.view = 'join'; render(); setTimeout(() => { const i = document.getElementById('joincode'); if (i) i.focus(); }, 0); },
+  'add-player'(){ S.setup.players.push(''); store.set('setup', S.setup); render(); const i = document.getElementById('p' + (S.setup.players.length - 1)); if (i) i.focus(); },
+  'del-player'(el){ S.setup.players.splice(+el.dataset.i, 1); store.set('setup', S.setup); render(); },
+  'cat-mode'(el){ S.setup.catMode = el.dataset.v; store.set('setup', S.setup); render(); },
+  'toggle-cat'(el){ const c = el.dataset.c, a = S.setup.cats, i = a.indexOf(c); if (i >= 0) a.splice(i, 1); else a.push(c); store.set('setup', S.setup); render(); },
+  start: startGame,
+  'join-go'(){
+    const code = (S.joinCode || '').replace(/\D/g, '');
+    if (code.length !== 4) { S.o.error = 'הקוד הוא 4 ספרות.'; return render(); }
+    S.o.host = false; S.o.myName = null; S.view = 'game'; subscribe(code); saveSession(); render();
+    joinLobby(code);
+  },
+  leave(){
+    if (isOnline()) {
+      if (S.o.db && S.o.code && S.o.game && S.o.game.phase === 'lobby') S.o.db.doc('games/' + S.o.code + '/players/' + PID).delete().catch(() => {});
+      unsubAll(); store.del('onlineSession');
+      if (S.o.db && S.o.db.leave) { const d = S.o.db; setTimeout(() => d.leave(), 400); } S.o.game = null; S.o.code = null; S.o.myName = null; S.o.host = false; S.o.error = ''; }
+    S.view = 'home'; resetEphemeral(); render();
+  },
+  reveal(){ S.reveal = true; render(); },
+  hide(){ S.reveal = false; render(); },
+  'reveal-next'(){
+    const g = G(); S.reveal = false;
+    if (g.revealIdx >= g.players.length - 1) commit(Object.assign({}, g, { phase: 'clues' }));
+    else commit(Object.assign({}, g, { revealIdx: g.revealIdx + 1 }));
+  },
+  'to-clues'(){ commit(Object.assign({}, G(), { phase: 'clues' })); },
+  'to-vote'(){ commit(Object.assign({}, G(), { phase: 'vote', votes: {}, voteIdx: 0 })); },
+  'vote-ready'(){ S.vote.ready = true; render(); },
+  'vote-pick'(el){ S.vote.pick = el.dataset.p; render(); },
+  'vote-for'(el){ S.vote = { ready: true, pick: null, forPlayer: el.dataset.p }; render(); },
+  'vote-cancel'(){ S.vote = { ready: false, pick: null, forPlayer: null }; render(); },
+  'vote-change'(){ S.vote = { ready: true, pick: null, forPlayer: null, changing: true }; render(); },
+  'vote-confirm'(){
+    const g = G(); const pick = S.vote.pick; if (!pick) return;
+    if (!isOnline()) {
+      const voter = g.players[g.voteIdx];
+      const votes = Object.assign({}, g.votes); votes[voter] = pick;
+      S.vote = { ready: false, pick: null, forPlayer: null };
+      const ng = Object.assign({}, g, { votes, voteIdx: g.voteIdx + 1 });
+      commit(ng.voteIdx >= g.players.length ? finishVoting(ng) : ng);
+      return;
+    }
+    castOnlineVote(S.vote.forPlayer || S.o.myName, pick);
+  },
+  'reveal-votes'(){ const g = G(); commit(finishVoting(Object.assign({}, g, { votes: onlineVotes(g) }))); },
+  'guess-show'(){ S.guessShown = true; render(); },
+  guess(el){ commit(resolveGuess(G(), el.dataset.v === '1')); },
+  'next-round'(){ commit(newRound(G())); },
+  'new-game'(){
+    const g = G();
+    if (isOnline()) { A.leave(); S.mode = 'online'; }
+    else { S.local = null; store.del('localGame'); }
+    S.setup.players = g.players.slice(); store.set('setup', S.setup);
+    S.view = 'setup'; render();
+  }
+};
+
+$app.addEventListener('click', e => {
+  const el = e.target.closest('[data-a]'); if (!el || el.disabled) return;
+  const f = A[el.dataset.a]; if (f) f(el);
+});
+$app.addEventListener('input', e => {
+  const el = e.target;
+  if (el.dataset.in === 'player') { S.setup.players[+el.dataset.i] = el.value; store.set('setup', S.setup); }
+  else if (el.dataset.in === 'mgr') { S.mgrCode = el.value; }
+  else if (el.dataset.in === 'myname') { S.myNameInput = el.value; store.set('myName', el.value); if (S.homeErr && el.value.trim()) { S.homeErr = ''; } }
+  else if (el.dataset.in === 'code') { S.joinCode = el.value.replace(/\D/g, '').slice(0, 4); if (el.value !== S.joinCode) el.value = S.joinCode; }
+});
+$app.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  if (e.target.dataset.in === 'code') A['join-go']();
+  else if (e.target.dataset.in === 'mgr') A['mgr-go']();
+  else if (e.target.dataset.in === 'player') A['add-player']();
+});
+
+/* ---------- series countdown ---------- */
+let advancing = false;
+setInterval(() => {
+  const g = G();
+  if (S.view !== 'game' || !g || g.phase !== 'result' || !isSeries(g)) { advancing = false; return; }
+  const left = Math.min(PAUSE_MS / 1000, Math.max(0, Math.ceil((g.resultAt + PAUSE_MS - Date.now()) / 1000)));
+  const el = document.querySelector('[data-countdown]'); if (el && el.textContent !== String(left)) el.textContent = left;
+  if (left <= 0 && isHost() && !advancing) { advancing = true; commit(advanceSeries(g)); }
+}, 250);
+
+/* ---------- boot ---------- */
+async function init(){
+  if (S.local && S.local.phase) { /* keep on home; user can continue */ }
+  render();
+  const c = window.claude;
+  if (window.PeerDb) { S.o.db = window.PeerDb; S.o.canWrite = true; }
+  else if (c && typeof c.use === 'function') {
+    try {
+      const res = await Promise.all([c.use('db'), c.use('user')]);
+      S.o.db = res[0];
+      const user = res[1];
+      if (user) { S.o.myId = await user.id(); S.o.canWrite = await user.can('data.write'); }
+    } catch(e) {}
+  }
+  S.o.ready = true;
+  const sess = store.get('onlineSession', null);
+  if (sess && sess.code && S.o.db && S.view === 'home') {
+    S.mode = 'online'; S.o.host = !!sess.host; S.view = 'game';
+    if (sess.host && S.o.db.hostRoom) S.o.db.hostRoom(sess.code);
+    subscribe(sess.code);
+  }
+  render();
+}
+init();
+})();
+</script>
