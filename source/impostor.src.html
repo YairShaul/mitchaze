@@ -67,8 +67,8 @@ input[type=text],input[type=tel]{font:inherit;font-weight:600;width:100%;min-wid
 .err{background:var(--pink);color:#fff;font-weight:700;padding:10px 14px;border-radius:14px;border:3px solid var(--ink)}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-size:.9rem;font-weight:700;color:var(--fg)}
 .topbar .btn.ghost{color:var(--fg)}
-.code{font-family:var(--f-display);font-size:1.1rem;letter-spacing:.15em}
-.bigcode{font-family:var(--f-display);font-size:3rem;letter-spacing:.25em;color:var(--ink);text-align:center;background:var(--sun);border:3px solid var(--ink);border-radius:16px;padding:4px 0}
+.code{font-family:var(--f-body);font-weight:800;font-size:1.1rem;letter-spacing:.15em;font-variant-numeric:lining-nums tabular-nums;direction:ltr;unicode-bidi:isolate}
+.bigcode{font-family:var(--f-body);font-weight:900;font-variant-numeric:lining-nums tabular-nums;direction:ltr;line-height:1.2;font-size:3rem;letter-spacing:.25em;color:var(--ink);text-align:center;background:var(--sun);border:3px solid var(--ink);border-radius:16px;padding:4px 0}
 
 /* sticker avatars */
 .av{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;font-family:var(--f-display);font-size:1.3rem;background:var(--pc,var(--sun));color:var(--pt,var(--ink));border:3px solid var(--ink)}
@@ -130,7 +130,7 @@ tr.is-imp td:first-child{font-weight:800;color:var(--pink)}
 details{background:var(--card);color:var(--ink);border:3px solid var(--ink);border-radius:20px;padding:14px 18px}
 summary{cursor:pointer;font-weight:800}
 details ul{margin:10px 0 0;padding-inline-start:20px;display:flex;flex-direction:column;gap:6px}
-.countdown{font-family:var(--f-display);font-size:3.2rem;line-height:1;display:block}
+.countdown{font-family:var(--f-body);font-weight:900;font-variant-numeric:lining-nums tabular-nums;font-size:3.2rem;line-height:1;display:block}
 </style>
 
 <div id="app" dir="rtl" lang="he"></div>
@@ -173,6 +173,8 @@ const S = {
   mgrCode: '', mgrErr: '',
   local: store.get('localGame', null),
   reveal: false,
+  peek: false,
+  reuse: false,
   vote: { ready: false, pick: null, forPlayer: null },
   guessShown: false,
   joinCode: '',
@@ -196,7 +198,7 @@ function newRound(g){
   const w = WORDS[p.i];
   const impostor = g.players[Math.floor(Math.random() * g.players.length)];
   const order = shuffle(g.players);
-  return Object.assign({}, g, { round: (g.round || 0) + 1, phase: 'reveal', word: w[0], hint: w[1], category: w[2], impostor, order, used: p.used, votes: {}, revealIdx: 0, voteIdx: 0, guessed: null, deltas: null });
+  return Object.assign({}, g, { gid: Math.random().toString(36).slice(2, 10), round: (g.round || 0) + 1, phase: 'reveal', word: w[0], hint: w[1], category: w[2], impostor, order, used: p.used, votes: {}, revealIdx: 0, voteIdx: 0, guessed: null, deltas: null });
 }
 /* outcome: 'caught' = impostor alone at the top, 'tie' = impostor shares the top with others, 'escaped' = impostor not at the top */
 function tally(g){
@@ -245,7 +247,7 @@ function isHost(){
   const g = S.o.game;
   return S.o.host || !!(g && S.o.myId && g.hostId === S.o.myId);
 }
-function resetEphemeral(){ S.reveal = false; S.vote = { ready: false, pick: null, forPlayer: null }; S.guessShown = false; S.o.voteErr = ''; }
+function resetEphemeral(){ S.reveal = false; S.peek = false; S.vote = { ready: false, pick: null, forPlayer: null }; S.guessShown = false; S.o.voteErr = ''; }
 let writing = Promise.resolve();
 function commit(g){
   const prev = G();
@@ -253,6 +255,7 @@ function commit(g){
   if (isOnline()) {
     S.o.game = g; syncMe(); render();
     const ref = S.o.db.doc('games/' + S.o.code);
+    if (prev && prev.gid !== g.gid) Object.keys(S.o.voteDocs).forEach(id => { if (S.o.voteDocs[id].gid !== g.gid) S.o.db.doc('games/' + S.o.code + '/votes/' + id).delete().catch(() => {}); });
     writing = writing.then(() => ref.set(g)).catch(e => { S.o.error = 'השמירה נכשלה (' + ((e && e.code) || 'שגיאה') + '). נסו שוב.'; render(); });
   } else {
     S.local = g; store.set('localGame', g); render();
@@ -265,7 +268,8 @@ function syncMe(){ const g = S.o.game; S.o.myName = (g && g.pids && g.pids[PID])
 function myTypedName(){ return (S.myNameInput || '').trim().slice(0, 20); }
 function joinLobby(code){
   const name = myTypedName();
-  return S.o.db.doc('games/' + code + '/players/' + PID).set({ name, at: Date.now() }).catch(e => {
+  const was = S.o.code === code && S.o.lobby.find(p => p.pid === PID);
+  return S.o.db.doc('games/' + code + '/players/' + PID).set({ name, at: (was && was.at) || Date.now() }).catch(e => {
     S.o.error = (e && e.code === 'invalid_argument')
       ? 'אין לך הרשאה להצטרף מהטלפון הזה. בקשו ממי שפתח את העמוד לשתף אותו איתכם עם הרשאת עריכה.'
       : 'ההצטרפות נכשלה. נסו שוב.';
@@ -282,10 +286,25 @@ function lobbyNames(){
   return { players, pids };
 }
 
+function lobbyRoster(){
+  const ln = lobbyNames(); if (ln.players.length < 3) return null;
+  const scores = {}; ln.players.forEach(n => scores[n] = 0);
+  return { players: ln.players, pids: ln.pids, scores };
+}
+/* leaving a game closes its connection a moment later, unless we come straight back to it */
+let pendingLeave = null;
+function flushLeave(code){
+  if (!pendingLeave) return;
+  clearTimeout(pendingLeave.t);
+  if (pendingLeave.code !== code) pendingLeave.run();
+  pendingLeave = null;
+}
+function renderGame(){ if (S.view === 'game') render(); }
 function unsubAll(){ S.o.unsubs.forEach(u => { try { u(); } catch(e){} }); S.o.unsubs = []; }
 function subscribe(code){
-  unsubAll();
+  unsubAll(); flushLeave(code);
   const o = S.o;
+  o.lobby = [];
   o.code = code; o.game = null; o.voteDocs = {}; o.loading = true; o.error = '';
   const timer = setTimeout(() => { if (o.loading) { o.error = 'לא מצליחים להגיע למשחק כרגע. בדקו שהקוד נכון, שיש אינטרנט, ושהמשחק פתוח בטלפון של המנהל.'; render(); } }, 10000);
   o.unsubs.push(o.db.doc('games/' + code).onSnapshot(snap => {
@@ -296,31 +315,32 @@ function subscribe(code){
     clearTimeout(timer); o.loading = false; o.error = '';
     const g = snap.data();
     if (!o.game || o.game.round !== g.round || o.game.phase !== g.phase) resetEphemeral();
-    o.game = g; syncMe(); render();
+    o.game = g; syncMe(); renderGame();
   }, e => { clearTimeout(timer); o.loading = false; o.error = 'החיבור למשחק נקטע. רעננו את הדף כדי להתחבר שוב.'; render(); }));
   o.unsubs.push(o.db.collection('games/' + code + '/votes').onSnapshot(snap => {
     const v = {}; snap.docs.forEach(d => { const x = d.data(); if (x) v[d.id] = x; });
-    o.voteDocs = v; render();
+    o.voteDocs = v; renderGame();
   }, () => {}));
   o.unsubs.push(o.db.collection('games/' + code + '/players').onSnapshot(snap => {
     o.lobby = snap.docs.map(d => { const x = d.data() || {}; return { pid: d.id, name: String(x.name || ''), at: +x.at || 0 }; })
       .filter(p => p.name).sort((a, b) => a.at - b.at);
-    render();
+    renderGame();
   }, () => {}));
 }
 function onlineVotes(g){
   const out = {};
-  Object.keys(S.o.voteDocs).forEach(id => { const x = S.o.voteDocs[id]; if (x.round === g.round && g.players.indexOf(x.voter) >= 0) out[x.voter] = x.target; });
+  Object.keys(S.o.voteDocs).forEach(id => { const x = S.o.voteDocs[id]; if (x.round === g.round && x.gid === g.gid && g.players.indexOf(x.voter) >= 0) out[x.voter] = x.target; });
   return out;
 }
 function castOnlineVote(voter, target){
   const g = S.o.game; const idx = g.players.indexOf(voter);
-  const ref = S.o.db.doc('games/' + S.o.code + '/votes/r' + g.round + 'p' + idx);
+  const vid = 'v' + (g.gid || 'x') + 'r' + g.round + 'p' + idx;
+  const ref = S.o.db.doc('games/' + S.o.code + '/votes/' + vid);
   S.o.voteErr = '';
-  const local = Object.assign({}, S.o.voteDocs); local['r' + g.round + 'p' + idx] = { round: g.round, voter, target };
+  const local = Object.assign({}, S.o.voteDocs); local[vid] = { round: g.round, gid: g.gid, voter, target };
   S.o.voteDocs = local; S.vote = { ready: false, pick: null, forPlayer: null }; render();
-  ref.set({ round: g.round, voter, target }).catch(e => {
-    const l2 = Object.assign({}, S.o.voteDocs); delete l2['r' + g.round + 'p' + idx]; S.o.voteDocs = l2;
+  ref.set({ round: g.round, gid: g.gid, voter, target }).catch(e => {
+    const l2 = Object.assign({}, S.o.voteDocs); delete l2[vid]; S.o.voteDocs = l2;
     S.o.voteErr = (e && e.code === 'invalid_argument')
       ? 'אין לטלפון הזה הרשאה לשמור הצבעה. אמרו למארח בשקט במי בחרתם, והוא יקליד את ההצבעה בשבילכם.'
       : 'ההצבעה לא נשמרה. נסו שוב.';
@@ -373,7 +393,7 @@ function vMgr(){
   <div class="topbar"><button class="btn ghost" style="width:auto" data-a="home">→ חזרה</button></div>
   <div class="hero">${MASK}<h2>קוד מנהל</h2><p class="muted">רק מנהל המשחק יכול לפתוח משחק.</p></div>
   <div class="panel">
-    <input type="tel" id="mgrcode" data-in="mgr" inputmode="numeric" maxlength="12" placeholder="קוד מנהל" value="${esc(S.mgrCode)}" style="text-align:center;font-size:1.6rem;letter-spacing:.3em" autocomplete="off">
+    <input type="tel" id="mgrcode" data-in="mgr" inputmode="numeric" maxlength="12" placeholder="קוד מנהל" value="${esc(S.mgrCode)}" style="text-align:center;font-size:1.6rem;letter-spacing:.3em;font-variant-numeric:lining-nums tabular-nums" autocomplete="off">
     ${S.mgrErr ? `<p class="err">${esc(S.mgrErr)}</p>` : ''}
     <button class="btn" data-a="mgr-go">כניסה</button>
   </div>`;
@@ -390,7 +410,7 @@ function vSetup(){
     ${st.players.length > 3 ? `<button class="x" data-a="del-player" data-i="${i}" aria-label="הסרת שחקן">×</button>` : ''}</div>`).join('');
   const chips = CATS.map(c => `<button class="chip" data-a="toggle-cat" data-c="${esc(c)}" aria-pressed="${st.cats.indexOf(c) >= 0}">${esc(c)}<span class="n">${CAT_COUNT[c]}</span></button>`).join('');
   return `
-  <div class="topbar"><button class="btn ghost" style="width:auto" data-a="home">→ חזרה</button><span>פתיחת משחק</span></div>
+  <div class="topbar"><button class="btn ghost" style="width:auto" data-a="setup-back">→ חזרה</button><span>${S.reuse ? 'משחק חדש באותו קוד' : 'פתיחת משחק'}</span></div>
   <h2>איך משחקים?</h2>
   <div class="panel">
     <div class="seg" role="group" aria-label="מכשירים">
@@ -433,7 +453,7 @@ function vJoin(){
   <div class="topbar"><button class="btn ghost" style="width:auto" data-a="home">→ חזרה</button></div>
   <div class="hero">${MASK}<h2>הצטרפות למשחק</h2><p class="muted">מצטרפים בתור <b>${esc(myTypedName())}</b>. הקלידו את הקוד שמופיע אצל המנהל.</p></div>
   <div class="panel">
-    <input type="tel" id="joincode" data-in="code" inputmode="numeric" maxlength="4" placeholder="4 ספרות" value="${esc(S.joinCode)}" style="text-align:center;font-size:1.6rem;letter-spacing:.3em">
+    <input type="tel" id="joincode" data-in="code" inputmode="numeric" maxlength="4" placeholder="4 ספרות" value="${esc(S.joinCode)}" style="text-align:center;font-size:1.6rem;letter-spacing:.3em;font-variant-numeric:lining-nums tabular-nums">
     ${S.o.error ? `<p class="err">${esc(S.o.error)}</p>` : ''}
     <button class="btn" data-a="join-go">הצטרפות</button>
   </div>`;
@@ -447,8 +467,8 @@ function topbar(g){
   </div>`;
 }
 
-function secretCard(g, name){
-  if (!S.reveal) return `<button class="secret back" data-a="reveal" aria-label="הצגת הכרטיס שלי">${MASK}<span style="font-weight:700;font-size:1.1rem">לחצו כדי לראות</span><span class="small" style="opacity:.8">ודאו שאף אחד לא מציץ</span></button>`;
+function secretCard(g, name, open){
+  if (!S.reveal && !open) return `<button class="secret back" data-a="reveal" aria-label="הצגת הכרטיס שלי">${MASK}<span style="font-weight:700;font-size:1.1rem">לחצו כדי לראות</span><span class="small" style="opacity:.8">ודאו שאף אחד לא מציץ</span></button>`;
   if (name === g.impostor) return `<div class="secret imp reveal-in" role="status">
     <span class="label">אתה המתחזה</span><span class="note">הרמז שלך:</span><span class="big">${esc(g.hint)}</span>
     <span class="note">תגידו מילה שנשמעת בטוחה, ונסו להבין מהאחרים מה המילה.</span></div>`;
@@ -477,8 +497,13 @@ function vClues(g){
   return `<h2>סבב מילים</h2>
     <p class="muted">כל אחד אומר בקול מילה אחת שקשורה למילה הסודית, לפי הסדר. אפשר לעשות יותר מסיבוב אחד.</p>
     <ol class="order">${g.order.map(p => `<li>${av(g, p)}<span>${esc(p)}</span></li>`).join('')}</ol>
-    ${isOnline() ? `<details><summary>להציץ שוב בכרטיס שלי</summary><div style="margin-top:12px">${secretCard(g, S.o.myName)}</div>${S.reveal ? '<button class="btn alt" style="margin-top:10px" data-a="hide">הסתרה</button>' : ''}</details>` : ''}
+    ${peekCard(g)}
     ${host ? '<button class="btn" data-a="to-vote">עוברים להצבעה</button>' : '<p class="muted center small">המארח יעביר להצבעה בסוף הסבב.</p>'}`;
+}
+
+function peekCard(g){
+  if (!isOnline() || !S.o.myName) return '';
+  return `<button class="btn alt" data-a="peek" aria-expanded="${S.peek}">${S.peek ? 'הסתרת הכרטיס שלי' : 'להציץ שוב בכרטיס שלי'}</button>${S.peek ? secretCard(g, S.o.myName, true) : ''}`;
 }
 
 function targetsPicker(g, voter){
@@ -503,6 +528,7 @@ function vVote(g){
   else mine = `<h2>מי המתחזה?</h2>${targetsPicker(g, me)}`;
   const status = `<div class="status">${g.players.map(p => (p in votes) ? `<span class="done">${esc(p)} ✓</span>` : (host && p !== me ? `<button data-a="vote-for" data-p="${esc(p)}">${esc(p)}: הצבעה בשמו</button>` : `<span>${esc(p)}</span>`)).join('')}</div>`;
   return `${mine}
+    ${peekCard(g)}
     ${S.o.voteErr ? `<p class="err">${esc(S.o.voteErr)}</p>` : ''}
     <div class="panel"><h3>הצביעו ${doneCount} מתוך ${g.players.length}</h3>${status}
     ${host ? `<p class="muted small">שחקן שלא יכול להצביע מהטלפון שלו? לחצו על השם שלו והצביעו בשבילו.</p>
@@ -541,7 +567,7 @@ function vResult(g){
     foot = `<div class="panel center"><p>${last ? 'התוצאות הסופיות בעוד' : 'הסבב הבא מתחיל בעוד'} <b class="countdown" data-countdown>${Math.max(0, Math.ceil((g.resultAt + PAUSE_MS - Date.now()) / 1000))}</b> שניות</p>
       ${host ? `<button class="btn alt" data-a="advance">${last ? 'לתוצאות הסופיות עכשיו' : 'לסבב הבא עכשיו'}</button>` : ''}</div>`;
   } else {
-    foot = host ? `<button class="btn" data-a="next-round">משחק נוסף</button><button class="btn alt" data-a="new-game">שינוי הגדרות</button>` : '<p class="muted center small">המנהל יפתח את המשחק הבא.</p>';
+    foot = host ? `<button class="btn" data-a="next-round">משחק נוסף</button><button class="btn alt" data-a="new-game">שינוי הגדרות</button>` : '<p class="muted center small">המנהל יפתח את המשחק הבא. מי שהחליף שם או הצטרף עכשיו ייכנס בו.</p>';
   }
   return `${head}
     <div class="panel"><div class="row" style="justify-content:space-between"><span><span class="muted small">המילה</span><br><b style="font-family:var(--f-display);font-size:1.5rem;font-weight:400">${esc(g.word)}</b></span><span><span class="muted small">הרמז של המתחזה</span><br><b style="font-family:var(--f-display);font-size:1.5rem;font-weight:400">${esc(g.hint)}</b></span><span><span class="muted small">קטגוריה</span><br><b>${esc(g.category)}</b></span></div></div>
@@ -592,7 +618,7 @@ function vGame(){
         <button class="btn alt" data-a="leave">חזרה למסך הראשי</button>`;
     }
     if (o.game.phase === 'lobby') return vLobby(o.game) + (o.error ? `<p class="err">${esc(o.error)}</p>` : '');
-    if (!o.myName) return `<div class="hero">${MASK}<h2>המשחק כבר התחיל</h2><p class="muted">המנהל התחיל לפני שהספקת להצטרף. בקשו ממנו לפתוח משחק חדש.</p></div>
+    if (!o.myName) return `<div class="hero">${MASK}<h2>המשחק כבר באמצע</h2><p class="muted">נכנסת לרשימה בתור <b>${esc(myTypedName())}</b>. כשהמנהל יפתח את המשחק הבא, תהיו בו.</p></div>
         <button class="btn alt" data-a="leave">חזרה למסך הראשי</button>`;
   }
   const g = G();
@@ -632,6 +658,7 @@ function startGame(){
   }
   if (st.catMode === 'pick' && !st.cats.length) { S.setupErr = 'בחרו לפחות קטגוריה אחת.'; return render(); }
   S.setupErr = '';
+  if (S.reuse && !online) A.leave(); /* the manager switched this room to one phone */
   S.mode = online ? 'online' : 'local';
   const base = { players: [], scores: {}, catMode: st.catMode, cats: st.cats.slice(), used: [], round: 0, totalRounds: st.series === 'series' ? st.rounds : 0 };
   resetEphemeral();
@@ -639,9 +666,16 @@ function startGame(){
     base.players = names; names.forEach(n => base.scores[n] = 0);
     S.view = 'game'; commit(newRound(base)); return;
   }
-  const code = String(1000 + Math.floor(Math.random() * 9000));
   base.hostId = S.o.myId || null;
   base.phase = 'lobby';
+  if (S.reuse && S.o.code && S.o.game) {
+    /* same room, same code: everyone connected goes straight back to the waiting room */
+    const code = S.o.code; S.reuse = false; S.view = 'game';
+    commit(base);
+    writing = writing.then(() => joinLobby(code));
+    return;
+  }
+  const code = String(1000 + Math.floor(Math.random() * 9000));
   S.o.host = true; S.o.myName = null; S.o.code = code; saveSession();
   if (S.o.db.hostRoom) S.o.db.hostRoom(code);
   subscribe(code);
@@ -650,10 +684,14 @@ function startGame(){
   writing = writing.then(() => joinLobby(code));
 }
 function startFromLobby(){
-  const g = G(); const ln = lobbyNames();
-  if (ln.players.length < 3) return;
-  const scores = {}; ln.players.forEach(n => scores[n] = 0);
-  commit(newRound(Object.assign({}, g, { players: ln.players, pids: ln.pids, scores, round: 0 })));
+  const r = lobbyRoster(); if (!r) return;
+  commit(newRound(Object.assign({}, G(), r, { round: 0 })));
+}
+/* a new game online: whoever is in the room now, under the name they chose now */
+function nextOnlineGame(){
+  const g = G(); const r = lobbyRoster();
+  if (!r) return commit(Object.assign({}, g, { phase: 'lobby' }));
+  commit(newRound(Object.assign({}, g, r, { round: 0 })));
 }
 
 const A = {
@@ -670,6 +708,7 @@ const A = {
   'set-rounds'(el){ S.setup.rounds = +el.dataset.v; store.set('setup', S.setup); render(); },
   advance(){ const g = G(); if (g && g.phase === 'result' && isSeries(g)) commit(advanceSeries(g)); },
   'replay-series'(){
+    if (isOnline()) return nextOnlineGame();
     const g = G(); const scores = {}; g.players.forEach(p => scores[p] = 0);
     commit(newRound(Object.assign({}, g, { scores, round: 0 })));
   },
@@ -691,13 +730,17 @@ const A = {
   },
   leave(){
     if (isOnline()) {
-      if (S.o.db && S.o.code && S.o.game && S.o.game.phase === 'lobby') S.o.db.doc('games/' + S.o.code + '/players/' + PID).delete().catch(() => {});
-      unsubAll(); store.del('onlineSession');
-      if (S.o.db && S.o.db.leave) { const d = S.o.db; setTimeout(() => d.leave(), 400); } S.o.game = null; S.o.code = null; S.o.myName = null; S.o.host = false; S.o.error = ''; }
+      if (S.o.db && S.o.code) S.o.db.doc('games/' + S.o.code + '/players/' + PID).delete().catch(() => {});
+      unsubAll(); store.del('onlineSession'); flushLeave(null); S.reuse = false;
+      if (S.o.db && S.o.db.leave && S.o.code) {
+        const d = S.o.db, code = S.o.code;
+        pendingLeave = { code, run: () => d.leave(code) }; pendingLeave.t = setTimeout(() => { pendingLeave = null; d.leave(code); }, 400);
+      } S.o.game = null; S.o.code = null; S.o.myName = null; S.o.host = false; S.o.error = ''; }
     S.view = 'home'; resetEphemeral(); render();
   },
   reveal(){ S.reveal = true; render(); },
   hide(){ S.reveal = false; render(); },
+  peek(){ S.peek = !S.peek; render(); },
   'reveal-next'(){
     const g = G(); S.reveal = false;
     if (g.revealIdx >= g.players.length - 1) commit(Object.assign({}, g, { phase: 'clues' }));
@@ -725,13 +768,16 @@ const A = {
   'reveal-votes'(){ const g = G(); commit(finishVoting(Object.assign({}, g, { votes: onlineVotes(g) }))); },
   'guess-show'(){ S.guessShown = true; render(); },
   guess(el){ commit(resolveGuess(G(), el.dataset.v === '1')); },
-  'next-round'(){ commit(newRound(G())); },
+  'next-round'(){ if (isOnline()) nextOnlineGame(); else commit(newRound(G())); },
   'new-game'(){
     const g = G();
-    if (isOnline()) { A.leave(); S.mode = 'online'; }
-    else { S.local = null; store.del('localGame'); }
-    S.setup.players = g.players.slice(); store.set('setup', S.setup);
-    S.view = 'setup'; render();
+    if (isOnline()) { S.reuse = true; S.setup.mode = 'online'; }
+    else { S.local = null; store.del('localGame'); S.setup.players = g.players.slice(); }
+    store.set('setup', S.setup);
+    S.setupErr = ''; S.view = 'setup'; render();
+  },
+  'setup-back'(){
+    if (S.reuse) { S.reuse = false; S.view = 'game'; render(); } else A.home();
   }
 };
 

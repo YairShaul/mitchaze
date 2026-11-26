@@ -120,6 +120,9 @@
   window.PeerDb = {
     doc: docRef, collection: colRef,
     hostRoom(code) { hostCodes.add(code); },
-    leave() { Object.keys(rooms).forEach(k => { rooms[k].close(); delete rooms[k]; }); hostCodes.clear(); },
+    leave(code) {
+      Object.keys(rooms).forEach(k => { if (!code || k === code) { rooms[k].close(); delete rooms[k]; } });
+      if (code) hostCodes.delete(code); else hostCodes.clear();
+    },
   };
 })();
