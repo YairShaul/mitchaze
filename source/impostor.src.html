@@ -89,6 +89,10 @@ input[type=text],input[type=tel]{font:inherit;font-weight:600;width:100%;min-wid
 @keyframes flip-away{from{transform:perspective(900px) rotateY(0) rotate(1.5deg)}to{transform:perspective(900px) rotateY(90deg) rotate(0) scale(1.04)}}
 .reveal-in{animation:flip .5s cubic-bezier(.2,.9,.3,1.2)}
 @keyframes flip{from{transform:perspective(900px) rotateY(-90deg) rotate(0) scale(1.04)}to{transform:perspective(900px) rotateY(0) rotate(-1.5deg) scale(1)}}
+.secret.turning{animation:face-away .22s cubic-bezier(.5,0,.9,.6) forwards;pointer-events:none}
+@keyframes face-away{from{transform:perspective(900px) rotateY(0) rotate(-1.5deg)}to{transform:perspective(900px) rotateY(90deg) rotate(0) scale(1.04)}}
+.back-in{animation:back-in .5s cubic-bezier(.2,.9,.3,1.2)}
+@keyframes back-in{from{transform:perspective(900px) rotateY(-90deg) rotate(0) scale(1.04)}to{transform:perspective(900px) rotateY(0) rotate(1.5deg) scale(1)}}
 /* opening sections */
 summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px}
 summary::-webkit-details-marker{display:none}
@@ -96,7 +100,7 @@ summary::after{content:"";flex:none;width:9px;height:9px;margin:-4px 4px 0;borde
 details[open]>summary::after{transform:rotate(225deg);margin-top:4px}
 details[open]>:not(summary){animation:unfold .35s ease-out both}
 @keyframes unfold{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.reveal-in,.secret.back.flipping,details[open]>:not(summary){animation:none}summary::after{transition:none}body{transition:none}.btn,.choice{transition:none}}
+@media (prefers-reduced-motion:reduce){.reveal-in,.back-in,.secret.turning,.secret.back.flipping,details[open]>:not(summary){animation:none}summary::after{transition:none}body{transition:none}.btn,.choice{transition:none}}
 
 .pass{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:6px 0}
 .pass .who{font-family:var(--f-display);font-size:2.6rem;color:var(--fg);word-break:break-word;line-height:1.1}
@@ -183,6 +187,7 @@ const S = {
   mgrCode: '', mgrErr: '',
   local: store.get('localGame', null),
   reveal: false,
+  anim: null,
   peek: false,
   reuse: false,
   vote: { ready: false, pick: null, forPlayer: null },
@@ -478,11 +483,11 @@ function topbar(g){
 }
 
 function secretCard(g, name, open){
-  if (!S.reveal && !open) return `<button class="secret back" data-a="reveal" aria-label="הצגת הכרטיס שלי">${MASK}<span style="font-weight:700;font-size:1.1rem">לחצו כדי לראות</span><span class="small" style="opacity:.8">ודאו שאף אחד לא מציץ</span></button>`;
-  if (name === g.impostor) return `<div class="secret imp reveal-in" role="status">
+  if (!S.reveal && !open) return `<button class="secret back${S.anim === 'back' ? ' back-in' : ''}" data-a="reveal" aria-label="הצגת הכרטיס שלי">${MASK}<span style="font-weight:700;font-size:1.1rem">לחצו כדי לראות</span><span class="small" style="opacity:.8">ודאו שאף אחד לא מציץ</span></button>`;
+  if (name === g.impostor) return `<div class="secret imp${S.anim === 'in' ? ' reveal-in' : ''}" role="status">
     <span class="label">אתה המתחזה</span><span class="note">הרמז שלך:</span><span class="big">${esc(g.hint)}</span>
     <span class="note">תגידו מילה שנשמעת בטוחה, ונסו להבין מהאחרים מה המילה.</span></div>`;
-  return `<div class="secret word reveal-in" role="status">
+  return `<div class="secret word${S.anim === 'in' ? ' reveal-in' : ''}" role="status">
     <span class="label">המילה הסודית</span><span class="big">${esc(g.word)}</span>
     <span class="note">תגידו מילה קשורה, אבל לא ברורה מדי, כדי שהמתחזה לא יבין.</span></div>`;
 }
@@ -550,7 +555,7 @@ function vGuess(g){
   return `<div class="banner win"><span class="tag" style="color:inherit;opacity:.85">נתפס!</span><h2>${esc(g.impostor)} הוא המתחזה</h2><p>יש לו ניחוש אחד: מה המילה הסודית?</p></div>
     ${votesTable(g, false)}
     ${host ? (S.guessShown
-      ? `<div class="secret word reveal-in" style="min-height:0"><span class="label">המילה הייתה</span><span class="big">${esc(g.word)}</span></div>
+      ? `<div class="secret word${S.anim === 'in' ? ' reveal-in' : ''}" style="min-height:0"><span class="label">המילה הייתה</span><span class="big">${esc(g.word)}</span></div>
          <div class="row"><button class="btn ok" style="flex:1" data-a="guess" data-v="1">ניחש נכון</button><button class="btn alt" style="flex:1" data-a="guess" data-v="0">טעה</button></div>`
       : `<p class="muted center">קודם ${esc(g.impostor)} אומר את הניחוש בקול, ואז חושפים.</p><button class="btn" data-a="guess-show">חשיפת המילה</button>`)
       : '<p class="muted center">המארח יחשוף את המילה ויסמן אם הניחוש נכון.</p>'}`;
@@ -652,6 +657,7 @@ function render(){
   else if (S.view === 'game') h = vGame();
   else h = vHome();
   $app.innerHTML = h;
+  S.anim = null;
   document.documentElement.dataset.scene = scene();
 }
 
@@ -749,15 +755,19 @@ const A = {
     S.view = 'home'; resetEphemeral(); render();
   },
   reveal(el){
-    if (!el || reducedMotion() || !el.classList.contains('back')) { S.reveal = true; render(); return; }
+    if (!el || reducedMotion() || !el.classList.contains('back')) { S.reveal = true; S.anim = 'in'; render(); return; }
     if (el.classList.contains('flipping')) return;
     el.classList.add('flipping');
-    setTimeout(() => { S.reveal = true; render(); }, 220);
+    setTimeout(() => { S.reveal = true; S.anim = 'in'; render(); }, 220);
   },
-  hide(){ S.reveal = false; render(); },
-  peek(){ S.peek = !S.peek; render(); },
-  'reveal-next'(){
-    const g = G(); S.reveal = false;
+  hide(){ turnAway(() => { S.reveal = false; S.anim = 'back'; render(); }); },
+  peek(){
+    if (S.peek) turnAway(() => { S.peek = false; render(); });
+    else { S.peek = true; S.anim = 'in'; render(); }
+  },
+  'reveal-next'(){ turnAway(A['reveal-next-now']); },
+  'reveal-next-now'(){
+    const g = G(); S.reveal = false; S.anim = 'back';
     if (g.revealIdx >= g.players.length - 1) commit(Object.assign({}, g, { phase: 'clues' }));
     else commit(Object.assign({}, g, { revealIdx: g.revealIdx + 1 }));
   },
@@ -781,7 +791,7 @@ const A = {
     castOnlineVote(S.vote.forPlayer || S.o.myName, pick);
   },
   'reveal-votes'(){ const g = G(); commit(finishVoting(Object.assign({}, g, { votes: onlineVotes(g) }))); },
-  'guess-show'(){ S.guessShown = true; render(); },
+  'guess-show'(){ S.guessShown = true; S.anim = 'in'; render(); },
   guess(el){ commit(resolveGuess(G(), el.dataset.v === '1')); },
   'next-round'(){ if (isOnline()) nextOnlineGame(); else commit(newRound(G())); },
   'new-game'(){
@@ -796,6 +806,15 @@ const A = {
   }
 };
 
+/* turn the open card over before hiding it, like a real card */
+let turning = false;
+function turnAway(then){
+  const f = document.querySelector('.secret.word, .secret.imp');
+  if (!f || reducedMotion()) return then();
+  if (turning) return;
+  turning = true; f.classList.add('turning');
+  setTimeout(() => { turning = false; then(); }, 220);
+}
 function reducedMotion(){ try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch(e) { return false; } }
 /* open and close a section smoothly instead of all at once */
 function slideDetails(d){
