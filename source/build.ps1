@@ -38,10 +38,22 @@ if (Test-Path $themeFile) {
   $theme = [IO.File]::ReadAllText($themeFile, [Text.Encoding]::UTF8)
   $i = $webPage.IndexOf('</style>')
   $pv = $webPage.Substring(0, $i) + "`n" + $theme + $webPage.Substring($i)
+  # the detective from the logo, cropped round, instead of the mask on the home screen
+  $em = Get-Jpeg $logo 300 300 235 80 1220 1220
+  $codec = [Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+  $ep = New-Object Drawing.Imaging.EncoderParameters 1
+  $ep.Param[0] = New-Object Drawing.Imaging.EncoderParameter ([Drawing.Imaging.Encoder]::Quality), 85L
+  $ms = New-Object IO.MemoryStream
+  $em.Save($ms, $codec, $ep); $em.Dispose()
+  $heroOld = '<div class="hero">${MASK}<h1>'
+  if ($pv.IndexOf($heroOld) -lt 0) { throw 'home hero not found' }
+  $pv = $pv.Replace($heroOld, '<div class="hero"><img class="emblem" alt="" src="data:image/jpeg;base64,' + [Convert]::ToBase64String($ms.ToArray()) + '"><h1>')
+  # player sticker colors: cyan instead of yellow
+  $pv = $pv.Replace("['#FFD400','#1B0B3A']", "['#22D3EE','#1B0B3A']")
   $pdir = Join-Path $site 'preview'
   New-Item -ItemType Directory -Force $pdir | Out-Null
   $pfoot = (& $read 'web\foot.html').Replace("navigator.serviceWorker.register('sw.js')", "navigator.serviceWorker.register('../sw.js')")
-  $phead = $head.Replace('href="manifest.webmanifest"', 'href="../manifest.webmanifest"').Replace('href="icon-192.png', 'href="../icon-192.png').Replace('href="apple-touch-icon.png', 'href="../apple-touch-icon.png')
+  $phead = $head.Replace('content="#FFD400"', 'content="#07152F"').Replace('href="manifest.webmanifest"', 'href="../manifest.webmanifest"').Replace('href="icon-192.png', 'href="../icon-192.png').Replace('href="apple-touch-icon.png', 'href="../apple-touch-icon.png')
   [IO.File]::WriteAllText((Join-Path $pdir 'index.html'), $phead + $pv + $pfoot, $enc)
 }
 Copy-Item (Join-Path $root 'web\manifest.webmanifest'), (Join-Path $root 'web\sw.js') $site -Force

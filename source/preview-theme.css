@@ -3,13 +3,14 @@
    mint = clue round, sky = voting/results. */
 :root{
   --navy:#07152F; --cyan:#22D3EE; --red:#FF2D55;
+  --sun:var(--cyan); /* every yellow accent (button text, code box, labels, confetti) becomes the logo's cyan */
   --bg:var(--navy); --fg:#FFFFFF; --fg-muted:#A9BCDD;
   --glow:var(--pink); --edge:var(--cyan);
   --shadow:5px 5px 0 var(--edge);
 }
-html[data-scene="night"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#C9BDFF;--glow:var(--violet);--edge:var(--sun)}
+html[data-scene="night"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#C9BDFF;--glow:var(--violet);--edge:var(--cyan)}
 html[data-scene="mint"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#9FE6DA;--glow:var(--mint);--edge:var(--mint)}
-html[data-scene="paper"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#A9BCDD;--glow:var(--sky);--edge:var(--sun)}
+html[data-scene="paper"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#A9BCDD;--glow:var(--sky);--edge:var(--sky)}
 html{background:var(--navy)}
 body{background:transparent;position:relative;min-height:100vh;min-height:100dvh}
 html::before,html::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:-1}
@@ -31,3 +32,6 @@ html::after{opacity:.55;background:url("data:image/svg+xml;utf8,<svg xmlns='http
 .secret{box-shadow:8px 8px 0 var(--edge)}
 h1,h2{text-shadow:3px 3px 0 color-mix(in srgb, var(--glow) 70%, transparent)}
 @media (prefers-reduced-motion:reduce){html::before{transition:none}}
+/* home screen: the detective from the logo instead of the mask */
+.emblem{width:148px;height:148px;border-radius:50%;object-fit:cover;border:3px solid var(--cyan);box-shadow:0 0 0 5px var(--navy),0 0 0 7px color-mix(in srgb, var(--red) 70%, transparent),0 0 36px color-mix(in srgb, var(--cyan) 45%, transparent)}
+input[type=text],input[type=tel]{background:#F2F7FF}
