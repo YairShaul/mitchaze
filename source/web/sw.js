@@ -1,5 +1,5 @@
 // Keeps the app working offline (one-phone mode). Bump VERSION when files change.
-const VERSION = 'mitchaze-v4';
+const VERSION = 'mitchaze-v5';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -20,7 +20,8 @@ self.addEventListener('fetch', e => {
   const cacheable = url.origin === self.location.origin || /fonts\.(googleapis|gstatic)\.com|unpkg\.com/.test(url.host);
   if (!cacheable) return;
   e.respondWith(
-    fetch(req).then(res => {
+    // the game's own files skip the browser's 10-minute cache, so a new version shows up at once
+    (url.origin === self.location.origin ? fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }) : fetch(req)).then(res => {
       if (res && (res.ok || res.type === 'opaque')) {
         const copy = res.clone();
         caches.open(VERSION).then(c => c.put(req, copy));

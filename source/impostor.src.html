@@ -379,7 +379,7 @@ function vHome(){
     <input type="text" id="myname" data-in="myname" value="${esc(S.myNameInput)}" placeholder="השם שלך במשחק" maxlength="20" autocomplete="nickname">
     ${S.homeErr ? `<p class="err">${esc(S.homeErr)}</p>` : ''}
   </div>
-  ${lg && lg.phase && S.mgr ? `<button class="btn" data-a="continue-local">המשך את המשחק בטלפון הזה</button>` : ''}
+  ${lg && lg.phase && S.mgr ? `<div class="prow"><button class="btn" style="flex:1" data-a="continue-local">המשך את המשחק בטלפון הזה</button><button class="x" style="width:54px;height:54px" data-a="discard-local" aria-label="מחיקת המשחק השמור" title="מחיקת המשחק השמור">×</button></div>` : ''}
   <section class="stack">
     <span class="tag">שחקנים</span>
     ${join}
@@ -729,6 +729,7 @@ const A = {
     commit(newRound(Object.assign({}, g, { scores, round: 0 })));
   },
   'continue-local'(){ S.mode = 'local'; S.view = 'game'; resetEphemeral(); render(); },
+  'discard-local'(){ S.local = null; store.del('localGame'); render(); },
   'lobby-start': startFromLobby,
   'online-join'(){
     if (!myTypedName()) { S.homeErr = 'כתבו קודם את השם שלכם.'; render(); const i = document.getElementById('myname'); if (i) i.focus(); return; }
@@ -756,9 +757,9 @@ const A = {
   },
   reveal(el){
     if (!el || reducedMotion() || !el.classList.contains('back')) { S.reveal = true; S.anim = 'in'; render(); return; }
-    if (el.classList.contains('flipping')) return;
-    el.classList.add('flipping');
-    setTimeout(() => { S.reveal = true; S.anim = 'in'; render(); }, 220);
+    if (turning) return;
+    turning = true; turnCard(el, 1.5);
+    setTimeout(() => { turning = false; S.reveal = true; S.anim = 'in'; render(); }, TURN_MS);
   },
   hide(){ turnAway(() => { S.reveal = false; S.anim = 'back'; render(); }); },
   peek(){
@@ -808,12 +809,22 @@ const A = {
 
 /* turn the open card over before hiding it, like a real card */
 let turning = false;
+const TURN_MS = 230;
+function turnCard(el, fromTilt){
+  /* turn this card to its edge; driven from script so every phone browser plays it */
+  const kf = [
+    { transform: `perspective(900px) rotateY(0deg) rotate(${fromTilt}deg)` },
+    { transform: 'perspective(900px) rotateY(90deg) rotate(0deg) scale(1.04)' }];
+  el.style.pointerEvents = 'none';
+  if (el.animate) { el.style.animation = 'none'; el.animate(kf, { duration: TURN_MS, easing: 'cubic-bezier(.5,0,.9,.6)', fill: 'forwards' }); }
+  else el.classList.add(el.classList.contains('back') ? 'flipping' : 'turning');
+}
 function turnAway(then){
   const f = document.querySelector('.secret.word, .secret.imp');
   if (!f || reducedMotion()) return then();
   if (turning) return;
-  turning = true; f.classList.add('turning');
-  setTimeout(() => { turning = false; then(); }, 220);
+  turning = true; turnCard(f, -1.5);
+  setTimeout(() => { turning = false; then(); }, TURN_MS);
 }
 function reducedMotion(){ try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch(e) { return false; } }
 /* open and close a section smoothly instead of all at once */
