@@ -31,6 +31,19 @@ New-Item -ItemType Directory -Force $site | Out-Null
 $head = (& $read 'web\head.html').Replace('/*PEERDB*/', (& $read 'web\peerdb.js'))
 $webPage = $page.Replace('<meta name="claude:viewport-fit-sides" content="cover">', '')
 [IO.File]::WriteAllText((Join-Path $site 'index.html'), $head + $webPage + (& $read 'web\foot.html'), $enc)
+
+# A design being tried out: preview\index.html = the same game with preview-theme.css on top (the real game is untouched)
+$themeFile = Join-Path $root 'preview-theme.css'
+if (Test-Path $themeFile) {
+  $theme = [IO.File]::ReadAllText($themeFile, [Text.Encoding]::UTF8)
+  $i = $webPage.IndexOf('</style>')
+  $pv = $webPage.Substring(0, $i) + "`n" + $theme + $webPage.Substring($i)
+  $pdir = Join-Path $site 'preview'
+  New-Item -ItemType Directory -Force $pdir | Out-Null
+  $pfoot = (& $read 'web\foot.html').Replace("navigator.serviceWorker.register('sw.js')", "navigator.serviceWorker.register('../sw.js')")
+  $phead = $head.Replace('href="manifest.webmanifest"', 'href="../manifest.webmanifest"').Replace('href="icon-192.png', 'href="../icon-192.png').Replace('href="apple-touch-icon.png', 'href="../apple-touch-icon.png')
+  [IO.File]::WriteAllText((Join-Path $pdir 'index.html'), $phead + $pv + $pfoot, $enc)
+}
 Copy-Item (Join-Path $root 'web\manifest.webmanifest'), (Join-Path $root 'web\sw.js') $site -Force
 
 # App icons: the logo, cropped square (and with room around it for round/maskable icons)

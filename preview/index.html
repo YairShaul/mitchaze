@@ -1,0 +1,1092 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#FFD400">
+<meta name="description" content="משחק מסיבה: כולם מקבלים מילה סודית, אחד מקבל רק רמז. מי המתחזה?">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="מתחזה">
+<link rel="manifest" href="../manifest.webmanifest">
+<link rel="icon" href="../icon-192.png?v=2">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png?v=2">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}html{-webkit-text-size-adjust:100%;touch-action:manipulation}</style>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+/* Direct phone-to-phone game state for the web version (PeerJS).
+   The manager's phone holds every document of its game and is the hub:
+   players connect to it with the game code, send their own writes
+   (joining the lobby, votes), and it sends the whole game back to everyone.
+   It offers the same small API the game uses on claude.ai (doc / collection /
+   set / delete / onSnapshot), so the game code is the same in both places. */
+(function () {
+  window.IS_WEB = true;
+  if (typeof window.Peer !== 'function') return;
+  const PREFIX = 'mitchaze-impostor-v1-';
+  const RTC = { config: { iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:global.stun.twilio.com:3478' },
+  ] } };
+  const CLIENT_PATH = /^games\/\d{4}\/(players|votes)\/[A-Za-z0-9_-]{1,64}$/;
+  const rooms = {};
+  const hostCodes = new Set();
+  const codeOf = path => { const m = /^games\/(\d{4})/.exec(path); return m ? m[1] : null; };
+  const lsGet = k => { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } };
+  const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+  const clone = o => JSON.parse(JSON.stringify(o));
+
+  function makeRoom(code, asHost) {
+    const r = { docs: asHost ? (lsGet('peerdb:' + code) || {}) : {}, ready: asHost, subs: new Set(), queue: [], conns: new Map(), hostConn: null, closed: false, peer: null, retryT: null };
+    const notify = () => r.subs.forEach(f => { try { f(); } catch (e) { console.error(e); } });
+    const broadcast = () => { const msg = { t: 'state', docs: r.docs }; r.conns.forEach(c => { if (c.open) { try { c.send(msg); } catch (e) {} } }); };
+    const apply = op => { if (op.t === 'set') r.docs[op.path] = op.data; else if (op.t === 'del') delete r.docs[op.path]; };
+    r.write = op => {
+      apply(op); notify();
+      if (asHost) { lsSet('peerdb:' + code, r.docs); broadcast(); return; }
+      if (r.hostConn && r.hostConn.open) { try { r.hostConn.send(op); return; } catch (e) {} }
+      r.queue.push(op);
+    };
+    const retry = () => { if (r.closed || r.retryT) return; r.retryT = setTimeout(() => { r.retryT = null; asHost ? start() : connectHost(); }, 3000); };
+
+    function connectHost() {
+      const peer = r.peer;
+      if (r.closed || !peer || peer.destroyed) return;
+      if (peer.disconnected) { try { peer.reconnect(); } catch (e) {} return retry(); }
+      let c;
+      try { c = peer.connect(PREFIX + code, { reliable: true }); } catch (e) { return retry(); }
+      let opened = false;
+      const to = setTimeout(() => { if (!opened) { try { c.close(); } catch (e) {} retry(); } }, 10000);
+      c.on('open', () => {
+        opened = true; clearTimeout(to); r.hostConn = c;
+        r.queue.splice(0).forEach(op => { try { c.send(op); } catch (e) {} });
+      });
+      c.on('data', d => {
+        if (d && d.t === 'state' && d.docs && typeof d.docs === 'object') { r.docs = d.docs; r.ready = true; notify(); }
+      });
+      c.on('close', () => { clearTimeout(to); if (r.hostConn === c) r.hostConn = null; retry(); });
+      c.on('error', () => {});
+    }
+
+    function start() {
+      if (r.closed) return;
+      const peer = asHost ? new Peer(PREFIX + code, RTC) : new Peer(RTC);
+      r.peer = peer;
+      peer.on('open', () => { if (!asHost) connectHost(); });
+      peer.on('error', err => {
+        const t = err && err.type;
+        if (!asHost && t === 'peer-unavailable') { r.hostConn = null; return retry(); }
+        // The code's address can stay taken for a few seconds after a reload: try again.
+        if (asHost && t === 'unavailable-id') { try { peer.destroy(); } catch (e) {} return retry(); }
+        if (t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed') {
+          if (peer.destroyed) retry();
+        }
+      });
+      peer.on('disconnected', () => { if (!r.closed) setTimeout(() => { if (!r.closed && !peer.destroyed) { try { peer.reconnect(); } catch (e) {} } }, 2000); });
+      if (asHost) {
+        peer.on('connection', c => {
+          c.on('open', () => { r.conns.set(c.peer, c); try { c.send({ t: 'state', docs: r.docs }); } catch (e) {} });
+          c.on('data', d => {
+            if (!d || typeof d.path !== 'string' || !CLIENT_PATH.test(d.path) || codeOf(d.path) !== code) return;
+            if (d.t === 'set') {
+              if (!d.data || typeof d.data !== 'object' || JSON.stringify(d.data).length > 4000) return;
+              r.write({ t: 'set', path: d.path, data: clone(d.data) });
+            } else if (d.t === 'del') r.write({ t: 'del', path: d.path });
+          });
+          c.on('close', () => r.conns.delete(c.peer));
+          c.on('error', () => {});
+        });
+      }
+    }
+    r.close = () => { r.closed = true; clearTimeout(r.retryT); try { r.peer && r.peer.destroy(); } catch (e) {} };
+    start();
+    return r;
+  }
+  const room = code => rooms[code] || (rooms[code] = makeRoom(code, hostCodes.has(code)));
+
+  const snap = (r, path) => ({ id: path.split('/').pop(), exists: path in r.docs, data: () => r.docs[path], metadata: { fromCache: !r.ready, hasPendingWrites: false } });
+  function docRef(path) {
+    const code = codeOf(path);
+    return {
+      path, id: path.split('/').pop(),
+      get: async () => snap(room(code), path),
+      set: async d => { room(code).write({ t: 'set', path, data: clone(d) }); },
+      update: async d => { const r = room(code); r.write({ t: 'set', path, data: Object.assign({}, r.docs[path] || {}, clone(d)) }); },
+      delete: async () => { room(code).write({ t: 'del', path }); },
+      onSnapshot(next) { const r = room(code); const f = () => { if (r.ready) next(snap(r, path)); }; r.subs.add(f); setTimeout(f, 0); return () => r.subs.delete(f); },
+      collection: p => colRef(path + '/' + p),
+    };
+  }
+  function colRef(path) {
+    const code = codeOf(path); const depth = path.split('/').length + 1;
+    return {
+      path, doc: id => docRef(path + '/' + id),
+      onSnapshot(next) {
+        const r = room(code);
+        const f = () => {
+          if (!r.ready) return;
+          const ds = Object.keys(r.docs).filter(k => k.startsWith(path + '/') && k.split('/').length === depth).map(k => snap(r, k));
+          next({ docs: ds, size: ds.length, empty: !ds.length, metadata: { fromCache: false, hasPendingWrites: false }, docChanges: () => [] });
+        };
+        r.subs.add(f); setTimeout(f, 0); return () => r.subs.delete(f);
+      },
+    };
+  }
+  window.PeerDb = {
+    doc: docRef, collection: colRef,
+    hostRoom(code) { hostCodes.add(code); },
+    leave(code) {
+      Object.keys(rooms).forEach(k => { if (!code || k === code) { rooms[k].close(); delete rooms[k]; } });
+      if (code) hostCodes.delete(code); else hostCodes.clear();
+    },
+  };
+})();
+
+</script>
+</head>
+<body>
+<title>מתחזה</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700;800&family=Suez+One&display=swap">
+<style>
+/* Layout: one narrow column held in the hand. Carnival direction: chunky ink outlines, hard offset shadows, sticker avatars.
+   The page ground changes per scene (sun = lobby, night = secret card, mint = clue round, paper = voting/results).
+   Deliberately a single bright look in both OS themes. */
+:root{
+  --ink:#1B0B3A; --ink-muted:#5E5375; --card:#FFFFFF;
+  --sun:#FFD400; --pink:#E6007E; --violet:#5B2EFF; --mint:#00C2A8; --orange:#FF7A00; --sky:#3DA9FC;
+  --bg:var(--sun); --fg:var(--ink); --fg-muted:#4D3F12;
+  --f-display:'Suez One','Rubik',system-ui,sans-serif;
+  --f-body:'Rubik',system-ui,-apple-system,'Segoe UI',Arial,sans-serif;
+  --shadow:5px 5px 0 var(--ink);
+  color-scheme:light;
+}
+html[data-scene="night"]{--bg:var(--violet);--fg:#FFFFFF;--fg-muted:#DCD3FF}
+html[data-scene="mint"]{--bg:var(--mint);--fg:var(--ink);--fg-muted:#0C4840}
+html[data-scene="paper"]{--bg:#FFFFFF;--fg:var(--ink);--fg-muted:var(--ink-muted)}
+*,*::before,*::after{box-sizing:border-box}
+html{background:var(--bg)}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:17px;line-height:1.5;transition:background-color .35s ease}
+#app{max-width:520px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 48px;display:flex;flex-direction:column;gap:18px}
+h1,h2,h3{font-family:var(--f-display);font-weight:400;margin:0;text-wrap:balance;line-height:1.15}
+h1{font-size:3.4rem}
+h2{font-size:1.8rem}
+h3{font-size:1.2rem}
+p{margin:0}
+.muted{color:var(--fg-muted)}
+.panel .muted,.choice .muted,.secret .muted{color:var(--ink-muted)}
+.small{font-size:.9rem}
+.stack{display:flex;flex-direction:column;gap:12px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row>*{min-width:0}
+.center{text-align:center}
+.hero{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding-top:12px}
+.mask{width:104px;color:var(--pink);filter:drop-shadow(4px 4px 0 var(--ink))}
+.mask .hole{fill:var(--bg)}
+.tag{font-size:.8rem;letter-spacing:.06em;font-weight:800;color:var(--fg-muted)}
+.panel{background:var(--card);color:var(--ink);border:3px solid var(--ink);border-radius:20px;padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow)}
+button{font:inherit;color:inherit;cursor:pointer;border:none;background:none}
+button:focus-visible,input:focus-visible{outline:3px solid var(--pink);outline-offset:3px}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px;padding:12px 18px;border-radius:16px;font-weight:800;font-size:1.08rem;background:var(--ink);color:var(--sun);border-bottom:5px solid var(--pink);width:100%;text-align:center;transition:transform .08s}
+.btn:active{transform:translateY(3px);border-bottom-width:2px}
+.btn.alt{background:var(--card);color:var(--ink);border:3px solid var(--ink)}
+.btn.ghost{background:transparent;color:var(--fg);border:none;min-height:44px;font-weight:600;text-decoration:underline;text-underline-offset:3px}
+.btn.ok{background:var(--mint);color:var(--ink);border-bottom-color:var(--ink)}
+.btn[disabled]{opacity:.4;cursor:not-allowed}
+.choice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:start;padding:16px 18px;border-radius:20px;background:var(--card);color:var(--ink);border:3px solid var(--ink);width:100%;box-shadow:var(--shadow);transition:transform .1s,box-shadow .1s}
+.choice b{font-family:var(--f-display);font-weight:400;font-size:1.4rem}
+.choice:hover{transform:translate(-2px,-2px);box-shadow:7px 7px 0 var(--ink)}
+.choice:active{transform:translate(3px,3px);box-shadow:2px 2px 0 var(--ink)}
+input[type=text],input[type=tel]{font:inherit;font-weight:600;width:100%;min-width:0;padding:12px 14px;border-radius:14px;border:3px solid var(--ink);background:#FFFDF3;color:var(--ink)}
+.prow{display:flex;gap:8px;align-items:center}
+.prow input{flex:1}
+.x{width:46px;height:46px;flex:none;border-radius:14px;background:var(--pink);color:#fff;font-size:1.4rem;line-height:1;border:3px solid var(--ink)}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:#F1ECFF;padding:5px;border-radius:16px;border:3px solid var(--ink)}
+.seg button{padding:10px 6px;border-radius:11px;font-weight:800;color:var(--ink-muted)}
+.seg button[aria-pressed=true]{background:var(--ink);color:var(--sun)}
+.seg button[disabled]{opacity:.4;cursor:not-allowed}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:7px 13px;border-radius:999px;background:var(--card);color:var(--ink);font-weight:700;font-size:.95rem;border:2px solid var(--ink)}
+.chip[aria-pressed=true]{background:var(--violet);color:#fff;box-shadow:3px 3px 0 var(--ink)}
+.chip .n{opacity:.7;font-weight:500;font-size:.8rem;margin-inline-start:4px}
+.err{background:var(--pink);color:#fff;font-weight:700;padding:10px 14px;border-radius:14px;border:3px solid var(--ink)}
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-size:.9rem;font-weight:700;color:var(--fg)}
+.topbar .btn.ghost{color:var(--fg)}
+.code{font-family:var(--f-body);font-weight:800;font-size:1.1rem;letter-spacing:.15em;font-variant-numeric:lining-nums tabular-nums;direction:ltr;unicode-bidi:isolate}
+.bigcode{font-family:var(--f-body);font-weight:900;font-variant-numeric:lining-nums tabular-nums;direction:ltr;line-height:1.2;font-size:3rem;letter-spacing:.25em;color:var(--ink);text-align:center;background:var(--sun);border:3px solid var(--ink);border-radius:16px;padding:4px 0}
+
+/* sticker avatars */
+.av{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;font-family:var(--f-display);font-size:1.3rem;background:var(--pc,var(--sun));color:var(--pt,var(--ink));border:3px solid var(--ink)}
+
+/* the secret card: a playing card */
+.secret{position:relative;min-height:300px;margin-inline:auto;max-width:92%;border-radius:22px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;padding:28px 20px;width:100%;border:4px solid var(--ink);box-shadow:8px 8px 0 var(--ink)}
+.secret.back{background:var(--pink);color:#fff;transform:rotate(1.5deg);background-image:radial-gradient(circle at 12px 12px,rgba(255,255,255,.22) 3px,transparent 4px);background-size:28px 28px}
+.secret.back .mask{color:var(--sun)}
+.secret.back .mask .hole{fill:var(--pink)}
+.secret.word,.secret.imp{background:var(--card);color:var(--ink);transform:rotate(-1.5deg)}
+.secret .label{font-size:.85rem;font-weight:800;padding:4px 12px;border-radius:999px;background:var(--sun);color:var(--ink);border:2px solid var(--ink)}
+.secret.imp .label{background:var(--pink);color:#fff}
+.secret .big{font-family:var(--f-display);font-size:clamp(2.4rem,12vw,3.6rem);line-height:1.1;word-break:break-word}
+.secret.imp .big{color:var(--violet)}
+.secret .note{font-size:.95rem;color:var(--ink-muted);max-width:30ch}
+/* turning the card over: the back turns away to its edge, then the face turns in */
+.secret.back.flipping{animation:flip-away .22s cubic-bezier(.5,0,.9,.6) forwards;pointer-events:none}
+@keyframes flip-away{from{transform:perspective(900px) rotateY(0) rotate(1.5deg)}to{transform:perspective(900px) rotateY(90deg) rotate(0) scale(1.04)}}
+.reveal-in{animation:flip .5s cubic-bezier(.2,.9,.3,1.2)}
+@keyframes flip{from{transform:perspective(900px) rotateY(-90deg) rotate(0) scale(1.04)}to{transform:perspective(900px) rotateY(0) rotate(-1.5deg) scale(1)}}
+.secret.turning{animation:face-away .22s cubic-bezier(.5,0,.9,.6) forwards;pointer-events:none}
+@keyframes face-away{from{transform:perspective(900px) rotateY(0) rotate(-1.5deg)}to{transform:perspective(900px) rotateY(90deg) rotate(0) scale(1.04)}}
+.back-in{animation:back-in .5s cubic-bezier(.2,.9,.3,1.2)}
+@keyframes back-in{from{transform:perspective(900px) rotateY(-90deg) rotate(0) scale(1.04)}to{transform:perspective(900px) rotateY(0) rotate(1.5deg) scale(1)}}
+/* opening sections */
+summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"";flex:none;width:9px;height:9px;margin:-4px 4px 0;border-inline-end:3px solid currentColor;border-bottom:3px solid currentColor;transform:rotate(45deg);transition:transform .3s ease,margin .3s ease}
+details[open]>summary::after{transform:rotate(225deg);margin-top:4px}
+details[open]>:not(summary){animation:unfold .35s ease-out both}
+@keyframes unfold{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.reveal-in,.back-in,.secret.turning,.secret.back.flipping,details[open]>:not(summary){animation:none}summary::after{transition:none}body{transition:none}.btn,.choice{transition:none}}
+
+.pass{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:6px 0}
+.pass .who{font-family:var(--f-display);font-size:2.6rem;color:var(--fg);word-break:break-word;line-height:1.1}
+
+ol.order{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;counter-reset:o}
+ol.order li{counter-increment:o;display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--card);color:var(--ink);border:3px solid var(--ink);border-radius:18px;font-weight:800;font-size:1.1rem}
+ol.order li::after{content:counter(o);margin-inline-start:auto;font-family:var(--f-display);color:var(--ink-muted)}
+ol.order li:first-child{box-shadow:var(--shadow)}
+ol.order li:first-child::after{content:"מתחיל";font-family:var(--f-body);font-size:.8rem;font-weight:800;background:var(--pink);color:#fff;padding:3px 10px;border-radius:999px}
+
+.targets{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px}
+.target{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:18px;background:var(--card);color:var(--ink);border:3px solid var(--ink);font-weight:800;font-size:1.05rem;word-break:break-word;transition:transform .1s,box-shadow .1s}
+.target .av{width:58px;height:58px;font-size:1.6rem}
+.target[aria-pressed=true]{background:var(--pink);color:#fff;transform:scale(1.05) rotate(-2deg);box-shadow:var(--shadow)}
+
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;background:var(--card);color:var(--ink)}
+th,td{text-align:start;padding:10px 8px;border-bottom:2px solid #EEE8F7}
+th{font-size:.8rem;color:var(--ink-muted);font-weight:800}
+td.num,th.num{text-align:center}
+tr:last-child td{border-bottom:none}
+tr.is-imp td{background:#FFE3F2}
+tr.is-imp td:first-child{font-weight:800;color:var(--pink)}
+.tablewrap{overflow-x:auto;border:3px solid var(--ink);border-radius:18px;box-shadow:var(--shadow)}
+.status{display:flex;flex-wrap:wrap;gap:6px}
+.status span{padding:6px 12px;border-radius:999px;font-size:.9rem;font-weight:700;background:#F1ECFF;color:var(--ink-muted);border:2px solid transparent}
+.status span.done{background:var(--mint);color:var(--ink);border-color:var(--ink)}
+.status button{padding:6px 12px;border-radius:999px;font-size:.9rem;font-weight:700;background:var(--card);color:var(--ink);border:2px dashed var(--ink)}
+.banner{position:relative;overflow:hidden;border-radius:22px;padding:22px 18px;text-align:center;display:flex;flex-direction:column;gap:6px;border:4px solid var(--ink);box-shadow:var(--shadow)}
+.banner.win{background:var(--mint);color:var(--ink)}
+.banner.lose{background:var(--pink);color:#fff}
+.banner h2{font-size:2rem;position:relative}
+.banner .tag,.banner p{color:inherit;position:relative}
+.confetti{position:absolute;inset:0;pointer-events:none}
+.confetti i{position:absolute;width:10px;height:16px;border:2px solid var(--ink);border-radius:2px}
+.confetti i:nth-child(1){top:10%;right:6%;background:var(--sun);transform:rotate(20deg)}
+.confetti i:nth-child(2){top:62%;right:12%;background:var(--violet);transform:rotate(-30deg)}
+.confetti i:nth-child(3){top:18%;left:8%;background:var(--pink);transform:rotate(45deg)}
+.confetti i:nth-child(4){top:70%;left:14%;background:var(--sun);transform:rotate(-12deg)}
+.confetti i:nth-child(5){top:40%;right:22%;background:#fff;transform:rotate(70deg);width:8px;height:8px;border-radius:50%}
+.confetti i:nth-child(6){top:35%;left:24%;background:var(--orange);transform:rotate(-55deg)}
+details{background:var(--card);color:var(--ink);border:3px solid var(--ink);border-radius:20px;padding:14px 18px}
+summary{cursor:pointer;font-weight:800}
+details ul{margin:10px 0 0;padding-inline-start:20px;display:flex;flex-direction:column;gap:6px}
+.countdown{font-family:var(--f-body);font-weight:900;font-variant-numeric:lining-nums tabular-nums;font-size:3.2rem;line-height:1;display:block}
+
+/* PREVIEW: the detective night background (like the logo). The cards, buttons and avatars keep their colors.
+   Each scene keeps its own color, now as a glow on the dark ground: pink = lobby, violet = secret card,
+   mint = clue round, sky = voting/results. */
+:root{
+  --navy:#07152F; --cyan:#22D3EE; --red:#FF2D55;
+  --bg:var(--navy); --fg:#FFFFFF; --fg-muted:#A9BCDD;
+  --glow:var(--pink); --edge:var(--cyan);
+  --shadow:5px 5px 0 var(--edge);
+}
+html[data-scene="night"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#C9BDFF;--glow:var(--violet);--edge:var(--sun)}
+html[data-scene="mint"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#9FE6DA;--glow:var(--mint);--edge:var(--mint)}
+html[data-scene="paper"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#A9BCDD;--glow:var(--sky);--edge:var(--sun)}
+html{background:var(--navy)}
+body{background:transparent;position:relative;min-height:100vh;min-height:100dvh}
+html::before,html::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:-1}
+/* the scene's color glows behind the radar */
+html::before{background:
+  radial-gradient(120% 70% at 50% 18%, color-mix(in srgb, var(--glow) 38%, transparent), transparent 62%),
+  radial-gradient(90% 60% at 50% 110%, color-mix(in srgb, var(--cyan) 18%, transparent), transparent 70%),
+  var(--navy);
+  transition:background .35s ease}
+/* radar rings, crosshair, fingerprints, magnifier, footprints */
+html::after{opacity:.55;background:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 860' preserveAspectRatio='xMidYMid slice'><g fill='none' stroke-linecap='round'><g stroke='%2322D3EE' stroke-opacity='.35'><circle cx='200' cy='300' r='150'/><circle cx='200' cy='300' r='210' stroke-dasharray='2 10'/><circle cx='200' cy='300' r='280' stroke-opacity='.18'/><path d='M200 40v80M200 480v120M-10 300h90M320 300h100' stroke-opacity='.4'/><path d='M200 300 L350 230' stroke-opacity='.5' stroke-width='2'/></g><g stroke='%23FF2D55' stroke-opacity='.45' stroke-width='1.6'><circle cx='330' cy='90' r='12'/><path d='M330 70v12M330 98v12M310 90h12M338 90h12'/></g><g stroke='%2322D3EE' stroke-opacity='.4' stroke-width='5'><circle cx='70' cy='120' r='26'/><path d='M52 140 L20 176' stroke-width='9'/></g><g stroke='%23FF2D55' stroke-opacity='.35' stroke-width='2'><path d='M330 560c-14 0-24 12-24 28v30'/><path d='M330 552c-20 0-32 16-32 36v34'/><path d='M330 544c-26 0-40 20-40 44v38'/><path d='M330 568c-8 0-14 8-14 20v26'/><path d='M330 560c14 0 24 12 24 28v24'/><path d='M330 552c20 0 32 16 32 36v20'/><path d='M330 544c26 0 40 20 40 44v14'/></g><g stroke='%2322D3EE' stroke-opacity='.28' stroke-width='2'><path d='M60 690c-14 0-24 12-24 28v30'/><path d='M60 682c-20 0-32 16-32 36v34'/><path d='M60 674c-26 0-40 20-40 44v38'/><path d='M60 690c14 0 24 12 24 28v24'/><path d='M60 682c20 0 32 16 32 36v20'/></g></g><g fill='%23FF2D55' fill-opacity='.28'><ellipse cx='40' cy='420' rx='9' ry='15' transform='rotate(-12 40 420)'/><ellipse cx='37' cy='442' rx='6' ry='6'/><ellipse cx='70' cy='380' rx='9' ry='15' transform='rotate(-12 70 380)'/><ellipse cx='67' cy='402' rx='6' ry='6'/></g><g fill='%2322D3EE' fill-opacity='.4'><rect x='300' y='160' width='10' height='6'/><rect x='316' y='178' width='18' height='4'/><rect x='84' y='250' width='6' height='18'/><rect x='96' y='262' width='14' height='4'/><rect x='290' y='420' width='6' height='6'/><rect x='120' y='520' width='16' height='4'/></g><g fill='%23FF2D55' fill-opacity='.4'><rect x='110' y='210' width='8' height='8'/><rect x='280' y='370' width='12' height='4'/><rect x='170' y='780' width='10' height='4'/></g><text x='350' y='800' font-family='Arial' font-weight='700' font-size='54' fill='%23FF2D55' fill-opacity='.28'>?</text><text x='240' y='660' font-family='Arial' font-weight='700' font-size='30' fill='%2322D3EE' fill-opacity='.22'>?</text></svg>") center/cover no-repeat}
+/* the cards stay bright and get a colored outline glow instead of the dark shadow that vanished on night */
+.choice:hover{box-shadow:7px 7px 0 var(--edge)}
+.choice:active{box-shadow:2px 2px 0 var(--edge)}
+.btn{box-shadow:0 0 0 2px color-mix(in srgb, var(--edge) 55%, transparent)}
+.btn.ghost{box-shadow:none}
+.mask{filter:drop-shadow(4px 4px 0 var(--edge))}
+.mask .hole{fill:var(--navy)}
+.secret{box-shadow:8px 8px 0 var(--edge)}
+h1,h2{text-shadow:3px 3px 0 color-mix(in srgb, var(--glow) 70%, transparent)}
+@media (prefers-reduced-motion:reduce){html::before{transition:none}}
+</style>
+
+<div id="app" dir="rtl" lang="he"></div>
+
+<script>const WORDS = [["גלידה","קר","אוכל"],["פיצה","משולש","אוכל"],["שוקולד","מתוק","אוכל"],["המבורגר","לחמנייה","אוכל"],["סושי","אורז","אוכל"],["פלאפל","כדור","אוכל"],["חומוס","ממרח","אוכל"],["שניצל","פירורי לחם","אוכל"],["פסטה","איטליה","אוכל"],["סלט","ירקות","אוכל"],["פופקורן","קולנוע","אוכל"],["עוגה","יום הולדת","אוכל"],["לחם","פרוסה","אוכל"],["גבינה","חורים","אוכל"],["ביצה","קליפה","אוכל"],["תפוח","עץ","אוכל"],["בננה","קליפה צהובה","אוכל"],["אבטיח","קיץ","אוכל"],["לימון","חמוץ","אוכל"],["עגבנייה","אדומה","אוכל"],["תפוח אדמה","צ\u0027יפס","אוכל"],["דבש","דבורים","אוכל"],["קפה","בוקר","אוכל"],["תה","כוס חמה","אוכל"],["מרק","כפית","אוכל"],["סופגנייה","חנוכה","אוכל"],["מיץ","סחיטה","אוכל"],["בורקס","שכבות","אוכל"],["שווארמה","שיפוד","אוכל"],["קורנפלקס","חלב","אוכל"],["כלב","נביחה","בעלי חיים"],["חתול","שפמים","בעלי חיים"],["פיל","חדק","בעלי חיים"],["ג\u0027ירפה","צוואר","בעלי חיים"],["אריה","מלך","בעלי חיים"],["דולפין","ים","בעלי חיים"],["פינגווין","קרח","בעלי חיים"],["קוף","בננה","בעלי חיים"],["נחש","זחילה","בעלי חיים"],["צב","איטי","בעלי חיים"],["ארנב","אוזניים","בעלי חיים"],["פרה","חלב","בעלי חיים"],["סוס","דהירה","בעלי חיים"],["תרנגולת","ביצים","בעלי חיים"],["דוב","חורף","בעלי חיים"],["זברה","פסים","בעלי חיים"],["תן","יללה","בעלי חיים"],["עטלף","לילה","בעלי חיים"],["דבורה","עוקץ","בעלי חיים"],["פרפר","כנפיים","בעלי חיים"],["כריש","שיניים","בעלי חיים"],["תנין","ביצה","בעלי חיים"],["נמלה","קבוצה","בעלי חיים"],["עכביש","רשת","בעלי חיים"],["ינשוף","חכם","בעלי חיים"],["נשר","גובה","בעלי חיים"],["קנגורו","כיס","בעלי חיים"],["גמל","דבשת","בעלי חיים"],["חזיר","בוץ","בעלי חיים"],["תוכי","מחקה","בעלי חיים"],["דג","מים","בעלי חיים"],["מדוזה","צורבת","בעלי חיים"],["חוף","חול","מקומות"],["בית ספר","פעמון","מקומות"],["בית חולים","רופאים","מקומות"],["ספרייה","שקט","מקומות"],["קניון","חנויות","מקומות"],["שדה תעופה","מזוודה","מקומות"],["מסעדה","תפריט","מקומות"],["קולנוע","חושך","מקומות"],["מוזיאון","תערוכה","מקומות"],["גן חיות","כלובים","מקומות"],["בנק","כספת","מקומות"],["תחנת דלק","אוטו","מקומות"],["מלון","חדר","מקומות"],["פארק","נדנדה","מקומות"],["שוק","מציאות","מקומות"],["מכולת","שכונה","מקומות"],["סופר","עגלה","מקומות"],["כנסת","חוקים","מקומות"],["אצטדיון","קהל","מקומות"],["כלא","סורגים","מקומות"],["בית קפה","קפוצ\u0027ינו","מקומות"],["ים המלח","ציפה","מקומות"],["ירושלים","אבן","מקומות"],["אילת","חופשה","מקומות"],["פריז","מגדל","מקומות"],["מדבר","צחיח","מקומות"],["יער","עצים","מקומות"],["הר","טיפוס","מקומות"],["אי","בודד","מקומות"],["כפר","שקט","מקומות"],["מערה","חשוך","מקומות"],["מטריה","גשם","חפצים"],["מפתח","מנעול","חפצים"],["שעון","זמן","חפצים"],["משקפיים","ראייה","חפצים"],["כיסא","ישיבה","חפצים"],["שולחן","רגליים","חפצים"],["מנורה","אור","חפצים"],["מראה","השתקפות","חפצים"],["טלוויזיה","שלט","חפצים"],["מקרר","פנימי","חפצים"],["סכין","חד","חפצים"],["כפית","קטנה","חפצים"],["צלחת","שבירה","חפצים"],["כוס","שתייה","חפצים"],["מברשת שיניים","בוקר","חפצים"],["סבון","קצף","חפצים"],["מגבת","רטובה","חפצים"],["כרית","ראש","חפצים"],["שמיכה","חורף","חפצים"],["מזוודה","טיסה","חפצים"],["תיק","גב","חפצים"],["ארנק","כסף","חפצים"],["עט","דיו","חפצים"],["מחברת","דפים","חפצים"],["מספריים","גזירה","חפצים"],["מטאטא","רצפה","חפצים"],["פטיש","מסמר","חפצים"],["מברג","בורג","חפצים"],["נר","להבה","חפצים"],["מצלמה","תמונה","חפצים"],["כדור","עגול","חפצים"],["בלון","אוויר","חפצים"],["שרשרת","צוואר","חפצים"],["טבעת","אצבע","חפצים"],["כובע","ראש","חפצים"],["נעל","זוג","חפצים"],["גרב","חור","חפצים"],["מעיל","קור","חפצים"],["חולצה","כפתורים","חפצים"],["מכנסיים","רגליים","חפצים"],["רופא","חלוק לבן","מקצועות"],["מורה","לוח","מקצועות"],["שוטר","סירנה","מקצועות"],["כבאי","אש","מקצועות"],["טייס","שמיים","מקצועות"],["נהג","הגה","מקצועות"],["טבח","סיר","מקצועות"],["נגר","עץ","מקצועות"],["חשמלאי","חוט","מקצועות"],["אינסטלטור","צינור","מקצועות"],["ספר","מספריים","מקצועות"],["צלם","עדשה","מקצועות"],["עורך דין","בית משפט","מקצועות"],["חייל","מדים","מקצועות"],["שף","מסעדה","מקצועות"],["אופה","תנור","מקצועות"],["רוקח","תרופות","מקצועות"],["מהנדס","תוכניות","מקצועות"],["שחקן","במה","מקצועות"],["זמר","מיקרופון","מקצועות"],["צייר","מכחול","מקצועות"],["מחבר","ספר","מקצועות"],["חקלאי","שדה","מקצועות"],["דייג","חכה","מקצועות"],["מאמן","שריקה","מקצועות"],["שופט","פטיש","מקצועות"],["אסטרונאוט","חלל","מקצועות"],["קוסם","שרביט","מקצועות"],["מלצר","מגש","מקצועות"],["מתכנת","מחשב","מקצועות"],["כדורגל","שער","ספורט"],["כדורסל","סל","ספורט"],["טניס","מחבט","ספורט"],["שחייה","בריכה","ספורט"],["ריצה","מרתון","ספורט"],["אופניים","פדלים","ספורט"],["סקי","שלג","ספורט"],["התעמלות","גמישות","ספורט"],["אגרוף","כפפות","ספורט"],["יוגה","נשימה","ספורט"],["גלישה","גל","ספורט"],["כדורעף","רשת","ספורט"],["גולף","חור","ספורט"],["שחמט","מלך","ספורט"],["פינג פונג","שולחן","ספורט"],["ג\u0027ודו","חגורה","ספורט"],["טיפוס","קיר","ספורט"],["חתירה","משוט","ספורט"],["אולימפיאדה","מדליה","ספורט"],["מכבי","קהל","ספורט"],["שופט קו","דגל","ספורט"],["כושר","משקולות","ספורט"],["שמש","חם","טבע"],["ירח","לילה","טבע"],["כוכב","נוצץ","טבע"],["גשם","רטוב","טבע"],["שלג","לבן","טבע"],["רוח","נושבת","טבע"],["ענן","שמיים","טבע"],["קשת","צבעים","טבע"],["ברק","רעם","טבע"],["הר געש","לבה","טבע"],["נהר","זורם","טבע"],["אגם","שקט","טבע"],["אוקיינוס","עמוק","טבע"],["גל","קצף","טבע"],["חול","גרגרים","טבע"],["סלע","קשה","טבע"],["פרח","ריח","טבע"],["עץ","שורשים","טבע"],["עשב","ירוק","טבע"],["קקטוס","קוצים","טבע"],["רעידת אדמה","רטט","טבע"],["ערפל","מטושטש","טבע"],["שמיים","כחול","טבע"],["קרח","נמס","טבע"],["אש","להבה","טבע"],["כוכב לכת","מסלול","טבע"],["שביל החלב","גלקסיה","טבע"],["ירוק","עלים","טבע"],["מכונית","כביש","תחבורה"],["אוטובוס","תחנה","תחבורה"],["רכבת","פסים","תחבורה"],["מטוס","המראה","תחבורה"],["ספינה","נמל","תחבורה"],["אופנוע","קסדה","תחבורה"],["סירה","מים","תחבורה"],["מונית","מונה","תחבורה"],["משאית","מטען","תחבורה"],["טרקטור","שדה","תחבורה"],["הליקופטר","להבים","תחבורה"],["צוללת","מתחת למים","תחבורה"],["רמזור","אדום","תחבורה"],["גשר","מעבר","תחבורה"],["מנהרה","חשוך","תחבורה"],["חניה","מקום","תחבורה"],["תחנת רכבת","לוח זמנים","תחבורה"],["קורקינט","חשמלי","תחבורה"],["כביש","אספלט","תחבורה"],["בלון פורח","גובה","תחבורה"],["חללית","שיגור","תחבורה"],["אמבולנס","סירנה","תחבורה"],["רכבל","הר","תחבורה"],["מעבורת","חוצה","תחבורה"],["לב","פעימות","גוף האדם"],["עין","ריסים","גוף האדם"],["אף","ריח","גוף האדם"],["אוזן","שמיעה","גוף האדם"],["שן","פה","גוף האדם"],["לשון","טעם","גוף האדם"],["יד","אצבעות","גוף האדם"],["רגל","הליכה","גוף האדם"],["מוח","חשיבה","גוף האדם"],["שיער","מסרק","גוף האדם"],["עור","רגיש","גוף האדם"],["ברך","כפיפה","גוף האדם"],["כתף","נשיאה","גוף האדם"],["בטן","רעב","גוף האדם"],["גב","כאב","גוף האדם"],["אצבע","טביעה","גוף האדם"],["צוואר","ראש","גוף האדם"],["עצם","שבר","גוף האדם"],["דם","אדום","גוף האדם"],["שריר","כוח","גוף האדם"],["חיוך","שיניים","גוף האדם"],["דמעה","בכי","גוף האדם"],["נשימה","ריאות","גוף האדם"],["מצח","קמטים","גוף האדם"],["טלפון","צלצול","טכנולוגיה"],["מחשב","מקלדת","טכנולוגיה"],["אינטרנט","רשת","טכנולוגיה"],["רובוט","מתכת","טכנולוגיה"],["סמארטפון","אפליקציות","טכנולוגיה"],["אוזניות","מוזיקה","טכנולוגיה"],["סוללה","טעינה","טכנולוגיה"],["וייפיי","סיסמה","טכנולוגיה"],["עכבר","לחיצה","טכנולוגיה"],["מסך","פיקסלים","טכנולוגיה"],["הודעה","וואטסאפ","טכנולוגיה"],["משחק וידאו","קונסולה","טכנולוגיה"],["רחפן","מעוף","טכנולוגיה"],["טאבלט","מסך מגע","טכנולוגיה"],["מדפסת","נייר","טכנולוגיה"],["שרת","ענן","טכנולוגיה"],["אפליקציה","הורדה","טכנולוגיה"],["סלפי","זרוע","טכנולוגיה"],["לווין","חלל","טכנולוגיה"],["מיקרוגל","דקות","טכנולוגיה"],["מזגן","קיץ","טכנולוגיה"],["שואב אבק","רעש","טכנולוגיה"],["מכונת כביסה","סיבוב","טכנולוגיה"],["חנוכה","נרות","חגים ומסורת"],["פסח","מצה","חגים ומסורת"],["ראש השנה","שופר","חגים ומסורת"],["פורים","תחפושת","חגים ומסורת"],["סוכות","סוכה","חגים ומסורת"],["שבת","נרות","חגים ומסורת"],["יום כיפור","צום","חגים ומסורת"],["חתונה","שמלה","חגים ומסורת"],["יום הולדת","מתנה","חגים ומסורת"],["בר מצווה","ספר תורה","חגים ומסורת"],["עצמאות","דגל","חגים ומסורת"],["לג בעומר","מדורה","חגים ומסורת"],["טו בשבט","נטיעה","חגים ומסורת"],["שבועות","חלב","חגים ומסורת"],["ברכה","איחול","חגים ומסורת"],["מתנה","עטיפה","חגים ומסורת"],["כריסמס","עץ","חגים ומסורת"],["אוזן המן","מתוק","חגים ומסורת"],["זיקוקים","שמיים","חגים ומסורת"],["מסיבה","ריקודים","חגים ומסורת"],["הזמנה","אירוע","חגים ומסורת"],["טקס","כבוד","חגים ומסורת"],["סרט","פופקורן","בידור"],["שיר","מנגינה","בידור"],["ריקוד","קצב","בידור"],["תיאטרון","במה","בידור"],["קרקס","ליצן","בידור"],["קומיקס","בועות","בידור"],["רומן","עלילה","בידור"],["חידה","פתרון","בידור"],["פאזל","חלקים","בידור"],["קלפים","חפיסה","בידור"],["קוביה","מזל","בידור"],["שש בש","שולחן","בידור"],["קונצרט","קהל","בידור"],["פסטיבל","אוהל","בידור"],["סטנדאפ","צחוק","בידור"],["מצעד","רחוב","בידור"],["לונה פארק","רכבת הרים","בידור"],["תחפושת","דמות","בידור"],["ליצן","אף אדום","בידור"],["קסם","אשליה","בידור"],["בדיחה","פאנץ\u0027","בידור"],["תוכנית ריאליטי","שידור","בידור"],["חדשות","כתב","בידור"],["פרסומת","מוצר","בידור"],["גיטרה","מיתרים","כלי נגינה"],["פסנתר","קלידים","כלי נגינה"],["תוף","מקלות","כלי נגינה"],["כינור","קשת","כלי נגינה"],["חליל","נשיפה","כלי נגינה"],["חצוצרה","פרצים","כלי נגינה"],["סקסופון","ג\u0027אז","כלי נגינה"],["אקורדיון","מתיחה","כלי נגינה"],["מקהלה","שירה","כלי נגינה"],["תזמורת","מנצח","כלי נגינה"],["מיקרופון","קול","כלי נגינה"],["רמקול","עוצמה","כלי נגינה"],["שמחה","צחוק","רגשות ומושגים"],["עצב","דמעות","רגשות ומושגים"],["כעס","צעקות","רגשות ומושגים"],["פחד","לילה","רגשות ומושגים"],["אהבה","לב","רגשות ומושגים"],["קנאה","ירוק","רגשות ומושגים"],["הפתעה","אוי","רגשות ומושגים"],["שעמום","משעמם","רגשות ומושגים"],["חלום","שינה","רגשות ומושגים"],["סוד","שקט","רגשות ומושגים"],["מזל","מזל טוב","רגשות ומושגים"],["חופש","דרור","רגשות ומושגים"],["שלום","יונה","רגשות ומושגים"],["מלחמה","חיילים","רגשות ומושגים"],["כסף","שטרות","רגשות ומושגים"],["זמן","שעות","רגשות ומושגים"],["זיכרון","עבר","רגשות ומושגים"],["אמת","שקר","רגשות ומושגים"],["כוח","חזק","רגשות ומושגים"],["מהירות","מרוץ","רגשות ומושגים"],["צבע","קשת","רגשות ומושגים"],["רעש","אוזניים","רגשות ומושגים"],["חשיכה","אור","רגשות ומושגים"],["חברות","אמון","רגשות ומושגים"],["הצלחה","פרס","רגשות ומושגים"],["מטבח","סירים","בית"],["סלון","ספה","בית"],["חדר שינה","מיטה","בית"],["אמבטיה","מים","בית"],["מרפסת","ספל קפה","בית"],["גג","רעפים","בית"],["מדרגות","עליה","בית"],["דלת","פתיחה","בית"],["חלון","זכוכית","בית"],["גינה","פרחים","בית"],["מעלית","כפתורים","בית"],["מקלחת","שמפו","בית"],["ספה","כריות","בית"],["מיטה","שינה","בית"],["תנור","חום","בית"],["כיור","ברז","בית"],["שטיח","רצפה","בית"],["וילון","אור","בית"],["כיתה","תלמידים","בית ספר"],["לוח","גיר","בית ספר"],["שיעורי בית","בעיות","בית ספר"],["מבחן","ציון","בית ספר"],["הפסקה","פעמון","בית ספר"],["תעודה","סוף שנה","בית ספר"],["מחק","טעויות","בית ספר"],["סרגל","ישר","בית ספר"],["קלמר","עפרונות","בית ספר"],["אוניברסיטה","תואר","בית ספר"],["מתמטיקה","מספרים","בית ספר"],["היסטוריה","עבר","בית ספר"],["מפה","דרך","בית ספר"],["גלובוס","סיבוב","בית ספר"],["מחשבון","חישוב","בית ספר"],["נדנדה","גובה","ילדות ומשחקים"],["מגלשה","ירידה","ילדות ומשחקים"],["בובה","שיער","ילדות ומשחקים"],["לגו","קוביות","ילדות ומשחקים"],["תופסת","מרדף","ילדות ומשחקים"],["מחבואים","ספירה","ילדות ומשחקים"],["בועות סבון","נשיפה","ילדות ומשחקים"],["עפיפון","חוט","ילדות ומשחקים"],["חול בים","דלי","ילדות ומשחקים"],["שוקולד חם","חורף","ילדות ומשחקים"],["פיג\u0027מה","לילה טוב","ילדות ומשחקים"],["שמלה","נסיכה","ילדות ומשחקים"],["חיבוק","אמא","ילדות ומשחקים"],["סיפור לפני השינה","שינה","ילדות ומשחקים"],["גן","ילדים","ילדות ומשחקים"],["פאודה","מחתרת","תוכניות טלוויזיה"],["ארץ נהדרת","סאטירה","תוכניות טלוויזיה"],["הישרדות","אי","תוכניות טלוויזיה"],["מאסטר שף","סינר","תוכניות טלוויזיה"],["האח הגדול","בית","תוכניות טלוויזיה"],["כוכב נולד","אודישן","תוכניות טלוויזיה"],["הזמר במסכה","תחפושת","תוכניות טלוויזיה"],["הכוכב הבא","אירוויזיון","תוכניות טלוויזיה"],["שטיסל","חרדים","תוכניות טלוויזיה"],["בושה","ספה","תוכניות טלוויזיה"],["חברים","קפה","תוכניות טלוויזיה"],["סיינפלד","ניו יורק","תוכניות טלוויזיה"],["הסימפסונס","צהוב","תוכניות טלוויזיה"],["משחקי הכס","דרקונים","תוכניות טלוויזיה"],["שרלוק","בלש","תוכניות טלוויזיה"],["ברייקינג בד","מעבדה","תוכניות טלוויזיה"],["משחק הדיונון","משחקים","תוכניות טלוויזיה"],["בית הנייר","שוד","תוכניות טלוויזיה"],["סטריינג\u0027ר ת\u0027ינגס","עולם הפוך","תוכניות טלוויזיה"],["בוב ספוג","אננס","תוכניות טלוויזיה"],["טום וג\u0027רי","רדיפה","תוכניות טלוויזיה"],["פוקימון","ללכוד","תוכניות טלוויזיה"],["דוראמון","כיס","תוכניות טלוויזיה"],["מיקי מאוס","עכבר","תוכניות טלוויזיה"],["פופאי","תרד","תוכניות טלוויזיה"],["דרגון בול","כדורים","תוכניות טלוויזיה"],["נטפליקס","סטרימינג","תוכניות טלוויזיה"],["יוטיוב","סרטונים","תוכניות טלוויזיה"],["איירון מן","שריון","מרוול וסרטים"],["קפטן אמריקה","מגן","מרוול וסרטים"],["ת\u0027ור","פטיש","מרוול וסרטים"],["האלק","ירוק","מרוול וסרטים"],["ספיידרמן","קורי","מרוול וסרטים"],["בלאק פנתר","ואקנדה","מרוול וסרטים"],["דוקטור סטריינג\u0027","קסם","מרוול וסרטים"],["תאנוס","כפפה","מרוול וסרטים"],["דדפול","חצוף","מרוול וסרטים"],["גרוט","עץ","מרוול וסרטים"],["הנוקמים","קבוצה","מרוול וסרטים"],["וולברין","ציפורניים","מרוול וסרטים"],["באטמן","עטלף","מרוול וסרטים"],["סופרמן","גלימה","מרוול וסרטים"],["ג\u0027וקר","צחוק","מרוול וסרטים"],["וונדר וומן","לאסו","מרוול וסרטים"],["שרק","ביצה","מרוול וסרטים"],["הארי פוטר","שרביט","מרוול וסרטים"],["שר הטבעות","טבעת","מרוול וסרטים"],["מלחמת הכוכבים","חלל","מרוול וסרטים"],["יודה","קטן","מרוול וסרטים"],["דארת\u0027 ויידר","שחור","מרוול וסרטים"],["טיטניק","קרחון","מרוול וסרטים"],["אווטאר","כחולים","מרוול וסרטים"],["מלך האריות","סימבה","מרוול וסרטים"],["צעצוע של סיפור","בובות","מרוול וסרטים"],["מצאו את נמו","דג","מרוול וסרטים"],["פרוזן","שלג","מרוול וסרטים"],["ג\u0027ורסיק פארק","דינוזאורים","מרוול וסרטים"],["מטריקס","כדור","מרוול וסרטים"],["מיניונים","צהובים","מרוול וסרטים"],["קונג פו פנדה","קונג פו","מרוול וסרטים"],["אלדין","מנורה","מרוול וסרטים"],["שלגיה","תפוח","מרוול וסרטים"],["סינדרלה","נעל","מרוול וסרטים"],["פינוקיו","אף","מרוול וסרטים"],["מדגסקר","גן חיות","מרוול וסרטים"],["אינדיאנה ג\u0027ונס","כובע","מרוול וסרטים"],["סופר מריו","אינסטלטור","מרוול וסרטים"],["פיקאצ\u0027ו","חשמל","מרוול וסרטים"],["מסי","ארגנטינה","אנשים מפורסמים"],["רונאלדו","פורטוגל","אנשים מפורסמים"],["מייקל ג\u0027ורדן","שיקגו","אנשים מפורסמים"],["איינשטיין","יחסות","אנשים מפורסמים"],["נפוליאון","קיסר","אנשים מפורסמים"],["צ\u0027רלי צ\u0027פלין","אילם","אנשים מפורסמים"],["מייקל ג\u0027קסון","ריקוד","אנשים מפורסמים"],["אלביס","רוק","אנשים מפורסמים"],["סטיב ג\u0027ובס","תפוח","אנשים מפורסמים"],["אילון מאסק","חלל","אנשים מפורסמים"],["ביל גייטס","מיקרוסופט","אנשים מפורסמים"],["בטהובן","חירש","אנשים מפורסמים"],["מוצרט","ילד פלא","אנשים מפורסמים"],["פיקאסו","ציור","אנשים מפורסמים"],["שייקספיר","הצגה","אנשים מפורסמים"],["לאונרדו דה וינצ\u0027י","מונה ליזה","אנשים מפורסמים"],["הרצל","חזון","אנשים מפורסמים"],["בן גוריון","שדה בוקר","אנשים מפורסמים"],["משה רבנו","הר סיני","אנשים מפורסמים"],["דוד המלך","קלע","אנשים מפורסמים"],["שלמה המלך","חכמה","אנשים מפורסמים"],["טום קרוז","משימה בלתי אפשרית","אנשים מפורסמים"],["וויל סמית\u0027","גיבוש","אנשים מפורסמים"],["ליאונרדו דיקפריו","אוסקר","אנשים מפורסמים"],["ג\u0027וני דפ","שודד ים","אנשים מפורסמים"],["צ\u0027רצ\u0027יל","סיגר","אנשים מפורסמים"],["נלסון מנדלה","כלא","אנשים מפורסמים"],["אדיסון","נורה","אנשים מפורסמים"],["קולומבוס","אמריקה","אנשים מפורסמים"],["ניוטון","כבידה","אנשים מפורסמים"],["אריק איינשטיין","שירים","אנשים מפורסמים"],["שלמה ארצי","זמר","אנשים מפורסמים"],["עידן רייכל","פסנתר","אנשים מפורסמים"],["עומר אדם","זמר","אנשים מפורסמים"],["אייל גולן","מזרחית","אנשים מפורסמים"],["ערן זהבי","שערים","אנשים מפורסמים"],["פנדל","נקודה","מושגי כדורגל"],["נבדל","דגלון","מושגי כדורגל"],["קרן","פינה","מושגי כדורגל"],["בעיטה חופשית","חומה","מושגי כדורגל"],["כרטיס אדום","הרחקה","מושגי כדורגל"],["כרטיס צהוב","אזהרה","מושגי כדורגל"],["שוער","כפפות","מושגי כדורגל"],["חלוץ","שערים","מושגי כדורגל"],["מגן","הגנה","מושגי כדורגל"],["קשר","אמצע","מושגי כדורגל"],["גול","שער","מושגי כדורגל"],["בישול","מסירה","מושגי כדורגל"],["הטריק","שלושה","מושגי כדורגל"],["ליגת האלופות","גביע","מושגי כדורגל"],["גביע העולם","מונדיאל","מושגי כדורגל"],["יורו","אירופה","מושגי כדורגל"],["דרבי","יריבות","מושגי כדורגל"],["תוספת זמן","דקות","מושגי כדורגל"],["הארכה","שלושים דקות","מושגי כדורגל"],["דו קרב פנדלים","הכרעה","מושגי כדורגל"],["חילוף","מחליף","מושגי כדורגל"],["ספסל","מחכה","מושגי כדורגל"],["אולטראס","תופים","מושגי כדורגל"],["כדרור","עקיפה","מושגי כדורגל"],["נגיחה","ראש","מושגי כדורגל"],["שער עצמי","טעות","מושגי כדורגל"],["קפטן","סרט","מושגי כדורגל"],["וי איי אר","בדיקה","מושגי כדורגל"],["הפסקה בין המחציות","סיום מחצית","מושגי כדורגל"],["צמד","שניים","מושגי כדורגל"],["קיק אוף","פתיחה","מושגי כדורגל"],["משחק חוץ","אורחים","מושגי כדורגל"],["משחק בית","אוהדים","מושגי כדורגל"],["טבלה","מקום","מושגי כדורגל"],["העברה","שוק","מושגי כדורגל"],["ירידה ליגה","בכי","מושגי כדורגל"],["שריקה","סיום","מושגי כדורגל"],["הגנה","חומה","מושגי כדורגל"],["מחזור","שבוע","מושגי כדורגל"],["מיסטר ביסט","מתנות","אנשים מפורסמים"]];</script>
+<script>
+(function(){
+const $app = document.getElementById('app');
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = {
+  get(k, d){ try { const v = localStorage.getItem('imp:' + k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } },
+  set(k, v){ try { localStorage.setItem('imp:' + k, JSON.stringify(v)); } catch(e){} },
+  del(k){ try { localStorage.removeItem('imp:' + k); } catch(e){} }
+};
+const CATS = [];
+const CAT_COUNT = {};
+WORDS.forEach(w => { if (!(w[2] in CAT_COUNT)) { CATS.push(w[2]); CAT_COUNT[w[2]] = 0; } CAT_COUNT[w[2]]++; });
+
+const MASK = '<svg class="mask" viewBox="0 0 64 34" aria-hidden="true"><path fill="currentColor" d="M3 7c9-5 19-4 29 3 10-7 20-8 29-3 2 11-2 21-12 23-8 1-13-3-17-8-4 5-9 9-17 8C5 28 1 18 3 7z"/><ellipse class="hole" cx="19" cy="16" rx="6.5" ry="4.2"/><ellipse class="hole" cx="45" cy="16" rx="6.5" ry="4.2"/></svg>';
+
+const CONFETTI = '<span class="confetti" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>';
+const PCOL = [['#FFD400','#1B0B3A'],['#E6007E','#FFFFFF'],['#00C2A8','#1B0B3A'],['#5B2EFF','#FFFFFF'],['#FF7A00','#1B0B3A'],['#3DA9FC','#1B0B3A']];
+function av(g, p){
+  const c = PCOL[Math.max(0, g.players.indexOf(p)) % PCOL.length];
+  return `<span class="av" style="--pc:${c[0]};--pt:${c[1]}" aria-hidden="true">${esc(Array.from(p)[0] || '?')}</span>`;
+}
+function scene(){
+  if (S.view !== 'game') return 'sun';
+  const g = G();
+  if (!g || (isOnline() && !S.o.myName)) return 'sun';
+  return ({ reveal: 'night', guess: 'night', clues: 'mint', vote: 'paper', result: 'paper', final: 'sun' })[g.phase] || 'paper';
+}
+
+const S = {
+  view: 'home',
+  mode: 'local',
+  setup: Object.assign({ players: ['', '', ''], catMode: 'random', cats: [], mode: 'local', series: 'series', rounds: 10 }, store.get('setup', {})),
+  setupErr: '',
+  mgr: store.get('mgr', false),
+  mgrCode: '', mgrErr: '',
+  local: store.get('localGame', null),
+  reveal: false,
+  anim: null,
+  peek: false,
+  reuse: false,
+  vote: { ready: false, pick: null, forPlayer: null },
+  guessShown: false,
+  joinCode: '',
+  myNameInput: store.get('myName', ''),
+  homeErr: '',
+  o: { db: null, ready: false, canWrite: null, myId: null, code: null, game: null, voteDocs: {}, lobby: [], unsubs: [], myName: null, host: false, error: '', loading: false, voteErr: '' }
+};
+
+/* ---------- game logic ---------- */
+function shuffle(a){ a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function pickWord(catMode, cats, used){
+  const pool = [];
+  WORDS.forEach((w, i) => { if (catMode === 'random' || cats.indexOf(w[2]) >= 0) pool.push(i); });
+  let fresh = pool.filter(i => used.indexOf(i) < 0);
+  if (!fresh.length) { fresh = pool; used = used.filter(i => pool.indexOf(i) < 0); }
+  const i = fresh[Math.floor(Math.random() * fresh.length)];
+  return { i, used: used.concat([i]) };
+}
+function newRound(g){
+  const p = pickWord(g.catMode, g.cats, g.used || []);
+  const w = WORDS[p.i];
+  const impostor = g.players[Math.floor(Math.random() * g.players.length)];
+  const order = shuffle(g.players);
+  return Object.assign({}, g, { gid: Math.random().toString(36).slice(2, 10), round: (g.round || 0) + 1, phase: 'reveal', word: w[0], hint: w[1], category: w[2], impostor, order, used: p.used, votes: {}, revealIdx: 0, voteIdx: 0, guessed: null, deltas: null });
+}
+/* outcome: 'caught' = impostor alone at the top, 'tie' = impostor shares the top with others, 'escaped' = impostor not at the top */
+function tally(g){
+  const c = {}; g.players.forEach(p => c[p] = 0);
+  Object.keys(g.votes || {}).forEach(v => { const t = g.votes[v]; if (t in c) c[t]++; });
+  const max = Math.max.apply(null, Object.values(c));
+  const top = Object.keys(c).filter(p => c[p] === max);
+  let outcome = 'escaped';
+  if (max > 0 && top.length > 1 && top.indexOf(g.impostor) >= 0) outcome = 'tie';
+  else if (max > 0 && top[0] === g.impostor) outcome = 'caught';
+  return { c, outcome, caught: outcome === 'caught' };
+}
+function score(g, guessed){
+  const outcome = tally(g).outcome;
+  const d = {}; g.players.forEach(p => d[p] = 0);
+  if (outcome === 'caught') {
+    Object.keys(g.votes || {}).forEach(v => { if (v !== g.impostor && g.votes[v] === g.impostor && v in d) d[v] += 1; });
+    if (guessed) d[g.impostor] += 1;
+  } else if (outcome === 'tie') d[g.impostor] += 1;
+  else d[g.impostor] += 2;
+  const scores = Object.assign({}, g.scores);
+  Object.keys(d).forEach(p => scores[p] = (scores[p] || 0) + d[p]);
+  return { deltas: d, scores };
+}
+function finishVoting(g){
+  if (tally(g).caught) return Object.assign({}, g, { phase: 'guess' });
+  return Object.assign({}, g, { phase: 'result', guessed: null, resultAt: Date.now() }, score(g, false));
+}
+function resolveGuess(g, ok){ return Object.assign({}, g, { phase: 'result', guessed: ok, resultAt: Date.now() }, score(g, ok)); }
+function isSeries(g){ return !!(g && g.totalRounds > 0); }
+function advanceSeries(g){ return g.round >= g.totalRounds ? Object.assign({}, g, { phase: 'final' }) : newRound(g); }
+const PAUSE_MS = 10000;
+const MGR_HASH = '1ccb468a6f45216deae3646f92d0ba381494c1bd85b691701f9c13e45a9b17f0';
+async function checkMgr(code){
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('imp-mgr:' + code.trim()));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('') === MGR_HASH;
+  } catch(e) { return false; }
+}
+
+/* ---------- state plumbing ---------- */
+function isOnline(){ return S.mode === 'online'; }
+function G(){ return isOnline() ? S.o.game : S.local; }
+function isHost(){
+  if (!isOnline()) return true;
+  const g = S.o.game;
+  return S.o.host || !!(g && S.o.myId && g.hostId === S.o.myId);
+}
+function resetEphemeral(){ S.reveal = false; S.peek = false; S.vote = { ready: false, pick: null, forPlayer: null }; S.guessShown = false; S.o.voteErr = ''; }
+let writing = Promise.resolve();
+function commit(g){
+  const prev = G();
+  if (!prev || prev.phase !== g.phase || prev.round !== g.round) resetEphemeral();
+  if (isOnline()) {
+    S.o.game = g; syncMe(); render();
+    const ref = S.o.db.doc('games/' + S.o.code);
+    if (prev && prev.gid !== g.gid) Object.keys(S.o.voteDocs).forEach(id => { if (S.o.voteDocs[id].gid !== g.gid) S.o.db.doc('games/' + S.o.code + '/votes/' + id).delete().catch(() => {}); });
+    writing = writing.then(() => ref.set(g)).catch(e => { S.o.error = 'השמירה נכשלה (' + ((e && e.code) || 'שגיאה') + '). נסו שוב.'; render(); });
+  } else {
+    S.local = g; store.set('localGame', g); render();
+  }
+}
+function saveSession(){ store.set('onlineSession', { code: S.o.code, host: S.o.host }); }
+let PID = store.get('pid', null);
+if (!PID) { PID = 'p' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); store.set('pid', PID); }
+function syncMe(){ const g = S.o.game; S.o.myName = (g && g.pids && g.pids[PID]) || null; }
+function myTypedName(){ return (S.myNameInput || '').trim().slice(0, 20); }
+function joinLobby(code){
+  const name = myTypedName();
+  const was = S.o.code === code && S.o.lobby.find(p => p.pid === PID);
+  return S.o.db.doc('games/' + code + '/players/' + PID).set({ name, at: (was && was.at) || Date.now() }).catch(e => {
+    S.o.error = (e && e.code === 'invalid_argument')
+      ? 'אין לך הרשאה להצטרף מהטלפון הזה. בקשו ממי שפתח את העמוד לשתף אותו איתכם עם הרשאת עריכה.'
+      : 'ההצטרפות נכשלה. נסו שוב.';
+    render();
+  });
+}
+function lobbyNames(){
+  const used = {}; const pids = {}; const players = [];
+  S.o.lobby.forEach(p => {
+    let n = (p.name || 'שחקן').trim() || 'שחקן';
+    if (used[n]) { let k = 2; while (used[n + ' ' + k]) k++; n = n + ' ' + k; }
+    used[n] = true; pids[p.pid] = n; players.push(n);
+  });
+  return { players, pids };
+}
+
+function lobbyRoster(){
+  const ln = lobbyNames(); if (ln.players.length < 3) return null;
+  const scores = {}; ln.players.forEach(n => scores[n] = 0);
+  return { players: ln.players, pids: ln.pids, scores };
+}
+/* leaving a game closes its connection a moment later, unless we come straight back to it */
+let pendingLeave = null;
+function flushLeave(code){
+  if (!pendingLeave) return;
+  clearTimeout(pendingLeave.t);
+  if (pendingLeave.code !== code) pendingLeave.run();
+  pendingLeave = null;
+}
+function renderGame(){ if (S.view === 'game') render(); }
+function unsubAll(){ S.o.unsubs.forEach(u => { try { u(); } catch(e){} }); S.o.unsubs = []; }
+function subscribe(code){
+  unsubAll(); flushLeave(code);
+  const o = S.o;
+  o.lobby = [];
+  o.code = code; o.game = null; o.voteDocs = {}; o.loading = true; o.error = '';
+  const timer = setTimeout(() => { if (o.loading) { o.error = 'לא מצליחים להגיע למשחק כרגע. בדקו שהקוד נכון, שיש אינטרנט, ושהמשחק פתוח בטלפון של המנהל.'; render(); } }, 10000);
+  o.unsubs.push(o.db.doc('games/' + code).onSnapshot(snap => {
+    if (!snap.exists) {
+      if (!snap.metadata.fromCache) { clearTimeout(timer); o.loading = false; o.game = null; o.error = 'לא נמצא משחק עם הקוד ' + code + '.'; render(); }
+      return;
+    }
+    clearTimeout(timer); o.loading = false; o.error = '';
+    const g = snap.data();
+    if (!o.game || o.game.round !== g.round || o.game.phase !== g.phase) resetEphemeral();
+    o.game = g; syncMe(); renderGame();
+  }, e => { clearTimeout(timer); o.loading = false; o.error = 'החיבור למשחק נקטע. רעננו את הדף כדי להתחבר שוב.'; render(); }));
+  o.unsubs.push(o.db.collection('games/' + code + '/votes').onSnapshot(snap => {
+    const v = {}; snap.docs.forEach(d => { const x = d.data(); if (x) v[d.id] = x; });
+    o.voteDocs = v; renderGame();
+  }, () => {}));
+  o.unsubs.push(o.db.collection('games/' + code + '/players').onSnapshot(snap => {
+    o.lobby = snap.docs.map(d => { const x = d.data() || {}; return { pid: d.id, name: String(x.name || ''), at: +x.at || 0 }; })
+      .filter(p => p.name).sort((a, b) => a.at - b.at);
+    renderGame();
+  }, () => {}));
+}
+function onlineVotes(g){
+  const out = {};
+  Object.keys(S.o.voteDocs).forEach(id => { const x = S.o.voteDocs[id]; if (x.round === g.round && x.gid === g.gid && g.players.indexOf(x.voter) >= 0) out[x.voter] = x.target; });
+  return out;
+}
+function castOnlineVote(voter, target){
+  const g = S.o.game; const idx = g.players.indexOf(voter);
+  const vid = 'v' + (g.gid || 'x') + 'r' + g.round + 'p' + idx;
+  const ref = S.o.db.doc('games/' + S.o.code + '/votes/' + vid);
+  S.o.voteErr = '';
+  const local = Object.assign({}, S.o.voteDocs); local[vid] = { round: g.round, gid: g.gid, voter, target };
+  S.o.voteDocs = local; S.vote = { ready: false, pick: null, forPlayer: null }; render();
+  ref.set({ round: g.round, gid: g.gid, voter, target }).catch(e => {
+    const l2 = Object.assign({}, S.o.voteDocs); delete l2[vid]; S.o.voteDocs = l2;
+    S.o.voteErr = (e && e.code === 'invalid_argument')
+      ? 'אין לטלפון הזה הרשאה לשמור הצבעה. אמרו למארח בשקט במי בחרתם, והוא יקליד את ההצבעה בשבילכם.'
+      : 'ההצבעה לא נשמרה. נסו שוב.';
+    render();
+  });
+}
+
+/* ---------- views ---------- */
+function vHome(){
+  const o = S.o; const lg = S.local;
+  let join;
+  if (!o.ready) join = '<p class="muted small">בודקים אם אפשר להצטרף ממכשיר אחר…</p>';
+  else if (!o.db) join = (window.IS_WEB
+    ? '<p class="muted small">כדי להצטרף למשחק מהטלפון שלך צריך חיבור לאינטרנט.</p>'
+    : '<p class="muted small">כדי להצטרף למשחק מהטלפון שלך צריך לפתוח את העמוד כשמחוברים לחשבון claude.ai.</p>');
+  else join = '<button class="choice" data-a="online-join"><b>הצטרפות למשחק</b><span class="muted small">המנהל פתח משחק? הקלידו את הקוד שמופיע אצלו.</span></button>';
+  return `
+  <div class="hero">${MASK}<h1>מתחזה</h1><p class="muted">כולם יודעים את המילה. חוץ מאחד.</p></div>
+  <div class="panel">
+    <label for="myname" style="font-weight:800">איך קוראים לך?</label>
+    <input type="text" id="myname" data-in="myname" value="${esc(S.myNameInput)}" placeholder="השם שלך במשחק" maxlength="20" autocomplete="nickname">
+    ${S.homeErr ? `<p class="err">${esc(S.homeErr)}</p>` : ''}
+  </div>
+  ${lg && lg.phase && S.mgr ? `<div class="prow"><button class="btn" style="flex:1" data-a="continue-local">המשך את המשחק בטלפון הזה</button><button class="x" style="width:54px;height:54px" data-a="discard-local" aria-label="מחיקת המשחק השמור" title="מחיקת המשחק השמור">×</button></div>` : ''}
+  <section class="stack">
+    <span class="tag">שחקנים</span>
+    ${join}
+  </section>
+  <section class="stack">
+    <span class="tag">מנהל המשחק</span>
+    <button class="choice" data-a="open"><b>פתיחת משחק</b><span class="muted small">${S.mgr ? 'מצב מנהל פעיל בטלפון הזה.' : 'נדרש קוד מנהל.'}</span></button>
+    ${S.mgr ? '<button class="btn ghost" data-a="mgr-off">יציאה ממצב מנהל בטלפון הזה</button>' : ''}
+  </section>
+  <details>
+    <summary>איך משחקים ואיך סופרים נקודות</summary>
+    <ul>
+      <li>כל השחקנים מקבלים את אותה מילה סודית. שחקן אחד הוא המתחזה ומקבל רק רמז למילה.</li>
+      <li>לפי הסדר, כל אחד אומר מילה אחת שקשורה למילה הסודית. לא ברורה מדי, כדי שהמתחזה לא יבין מה המילה.</li>
+      <li>בסוף כל אחד מצביע בסוד מי לדעתו המתחזה.</li>
+      <li>ניקוד יש רק בסדרת משחקים. במשחק בודד אין ניקוד.</li>
+      <li>המתחזה נתפס (קיבל הכי הרבה קולות לבד): כל מי שהצביע נגדו מקבל נקודה. אם הוא גם ניחש את המילה, גם הוא מקבל נקודה.</li>
+      <li>תיקו בהצבעה שהמתחזה חלק ממנו: רק המתחזה מקבל נקודה.</li>
+      <li>המתחזה לא נתפס (כולל תיקו בין שחקנים אחרים): הוא מקבל 2 נקודות.</li>
+    </ul>
+  </details>`;
+}
+
+function vMgr(){
+  return `
+  <div class="topbar"><button class="btn ghost" style="width:auto" data-a="home">→ חזרה</button></div>
+  <div class="hero">${MASK}<h2>קוד מנהל</h2><p class="muted">רק מנהל המשחק יכול לפתוח משחק.</p></div>
+  <div class="panel">
+    <input type="tel" id="mgrcode" data-in="mgr" inputmode="numeric" maxlength="12" placeholder="קוד מנהל" value="${esc(S.mgrCode)}" style="text-align:center;font-size:1.6rem;letter-spacing:.3em;font-variant-numeric:lining-nums tabular-nums" autocomplete="off">
+    ${S.mgrErr ? `<p class="err">${esc(S.mgrErr)}</p>` : ''}
+    <button class="btn" data-a="mgr-go">כניסה</button>
+  </div>`;
+}
+
+function vSetup(){
+  const st = S.setup; const o = S.o;
+  const onlineOk = o.ready && o.db && o.canWrite !== false;
+  if (st.mode === 'online' && !onlineOk) st.mode = 'local';
+  const on = st.mode === 'online';
+  const ROUNDS = [3, 5, 7, 10, 15, 20];
+  const rows = st.players.map((p, i) => `
+    <div class="prow"><input type="text" id="p${i}" data-in="player" data-i="${i}" value="${esc(p)}" placeholder="שחקן ${i + 1}" maxlength="20" autocomplete="off">
+    ${st.players.length > 3 ? `<button class="x" data-a="del-player" data-i="${i}" aria-label="הסרת שחקן">×</button>` : ''}</div>`).join('');
+  const chips = CATS.map(c => `<button class="chip" data-a="toggle-cat" data-c="${esc(c)}" aria-pressed="${st.cats.indexOf(c) >= 0}">${esc(c)}<span class="n">${CAT_COUNT[c]}</span></button>`).join('');
+  return `
+  <div class="topbar"><button class="btn ghost" style="width:auto" data-a="setup-back">→ חזרה</button><span>${S.reuse ? 'משחק חדש באותו קוד' : 'פתיחת משחק'}</span></div>
+  <h2>איך משחקים?</h2>
+  <div class="panel">
+    <div class="seg" role="group" aria-label="מכשירים">
+      <button data-a="set-mode" data-v="local" aria-pressed="${!on}">טלפון אחד</button>
+      <button data-a="set-mode" data-v="online" aria-pressed="${on}" ${onlineOk ? '' : 'disabled'}>כל אחד מהטלפון שלו</button>
+    </div>
+    <p class="muted small">${on ? 'תקבלו קוד, וכל שחקן יצטרף איתו מהטלפון שלו.' : (onlineOk ? 'מעבירים את הטלפון מיד ליד.' : (window.IS_WEB ? 'מעבירים את הטלפון מיד ליד. משחק מכמה טלפונים דורש חיבור לאינטרנט.' : 'מעבירים את הטלפון מיד ליד. משחק מכמה טלפונים דורש חיבור לחשבון claude.ai עם הרשאת עריכה לעמוד.'))}</p>
+    <div class="seg" role="group" aria-label="סדרה">
+      <button data-a="set-series" data-v="single" aria-pressed="${st.series === 'single'}">משחק בודד</button>
+      <button data-a="set-series" data-v="series" aria-pressed="${st.series === 'series'}">סדרה עם ניקוד</button>
+    </div>
+    ${st.series === 'series'
+      ? `<p class="muted small">כמה סבבים בסדרה? בין סבב לסבב יש הפסקה של 10 שניות, וטבלת הניקוד מוצגת רק בסוף.</p>
+         <div class="chips">${ROUNDS.map(n => `<button class="chip" data-a="set-rounds" data-v="${n}" aria-pressed="${st.rounds === n}">${n} סבבים</button>`).join('')}</div>`
+      : '<p class="muted small">סבב אחד בכל פעם, בלי ניקוד.</p>'}
+  </div>
+  ${on ? `<h2>השם שלך</h2>
+  <div class="panel">
+    <input type="text" id="myname" data-in="myname" value="${esc(S.myNameInput)}" placeholder="השם שלך במשחק" maxlength="20" autocomplete="nickname">
+    <p class="muted small">גם את/ה משחק/ת. שאר השחקנים יכתבו את השם שלהם בטלפון שלהם כשיצטרפו עם הקוד.</p>
+  </div>` : `<h2>מי משחק?</h2>
+  <div class="panel">
+    <div class="stack">${rows}</div>
+    ${st.players.length < 20 ? '<button class="btn alt" data-a="add-player">+ הוספת שחקן</button>' : ''}
+  </div>`}
+  <h2>מאיפה המילים?</h2>
+  <div class="panel">
+    <div class="seg" role="group" aria-label="בחירת מילים">
+      <button data-a="cat-mode" data-v="random" aria-pressed="${st.catMode === 'random'}">אקראי מהכול</button>
+      <button data-a="cat-mode" data-v="pick" aria-pressed="${st.catMode === 'pick'}">לפי קטגוריות</button>
+    </div>
+    ${st.catMode === 'pick' ? `<p class="muted small">אפשר לבחור כמה קטגוריות. המילה תוגרל מתוכן.</p><div class="chips">${chips}</div>` : `<p class="muted small">המילה תוגרל מכל ${WORDS.length} המילים, בלי חזרות עד שנגמרות.</p>`}
+  </div>
+  ${S.setupErr ? `<p class="err">${esc(S.setupErr)}</p>` : ''}
+  <button class="btn" data-a="start">${on ? 'פתיחת המשחק וקבלת קוד' : 'מתחילים'}</button>`;
+}
+
+function vJoin(){
+  return `
+  <div class="topbar"><button class="btn ghost" style="width:auto" data-a="home">→ חזרה</button></div>
+  <div class="hero">${MASK}<h2>הצטרפות למשחק</h2><p class="muted">מצטרפים בתור <b>${esc(myTypedName())}</b>. הקלידו את הקוד שמופיע אצל המנהל.</p></div>
+  <div class="panel">
+    <input type="tel" id="joincode" data-in="code" inputmode="numeric" maxlength="4" placeholder="4 ספרות" value="${esc(S.joinCode)}" style="text-align:center;font-size:1.6rem;letter-spacing:.3em;font-variant-numeric:lining-nums tabular-nums">
+    ${S.o.error ? `<p class="err">${esc(S.o.error)}</p>` : ''}
+    <button class="btn" data-a="join-go">הצטרפות</button>
+  </div>`;
+}
+
+function topbar(g){
+  const on = isOnline();
+  return `<div class="topbar">
+    <span>${isSeries(g) ? `סבב ${esc(Math.min(g.round, g.totalRounds))} מתוך ${esc(g.totalRounds)}` : 'משחק בודד'}${on ? ` · קוד <span class="code">${esc(S.o.code)}</span>` : ''}</span>
+    <span>${on && S.o.myName ? `את/ה: <b>${esc(S.o.myName)}</b> · ` : ''}<button class="btn ghost" style="width:auto;min-height:32px;padding:4px 6px;display:inline-flex" data-a="leave">יציאה</button></span>
+  </div>`;
+}
+
+function secretCard(g, name, open){
+  if (!S.reveal && !open) return `<button class="secret back${S.anim === 'back' ? ' back-in' : ''}" data-a="reveal" aria-label="הצגת הכרטיס שלי">${MASK}<span style="font-weight:700;font-size:1.1rem">לחצו כדי לראות</span><span class="small" style="opacity:.8">ודאו שאף אחד לא מציץ</span></button>`;
+  if (name === g.impostor) return `<div class="secret imp${S.anim === 'in' ? ' reveal-in' : ''}" role="status">
+    <span class="label">אתה המתחזה</span><span class="note">הרמז שלך:</span><span class="big">${esc(g.hint)}</span>
+    <span class="note">תגידו מילה שנשמעת בטוחה, ונסו להבין מהאחרים מה המילה.</span></div>`;
+  return `<div class="secret word${S.anim === 'in' ? ' reveal-in' : ''}" role="status">
+    <span class="label">המילה הסודית</span><span class="big">${esc(g.word)}</span>
+    <span class="note">תגידו מילה קשורה, אבל לא ברורה מדי, כדי שהמתחזה לא יבין.</span></div>`;
+}
+
+function vReveal(g){
+  if (isOnline()) {
+    const me = S.o.myName;
+    return `<h2>הכרטיס שלך</h2>${secretCard(g, me)}
+      ${S.reveal ? '<button class="btn alt" data-a="hide">הסתרה</button>' : ''}
+      ${isHost() ? `<div class="panel"><p class="small muted">כשכולם ראו את הכרטיס שלהם:</p><button class="btn" data-a="to-clues">מתחילים סבב מילים</button></div>`
+                 : '<p class="muted center small">המארח יתחיל את סבב המילים כשכולם מוכנים.</p>'}`;
+  }
+  const name = g.players[g.revealIdx];
+  const last = g.revealIdx === g.players.length - 1;
+  if (!S.reveal) return `<div class="pass"><span class="tag">שחקן ${g.revealIdx + 1} מתוך ${g.players.length}</span><span class="muted">העבירו את הטלפון ל</span><span class="who">${esc(name)}</span></div>${secretCard(g, name)}`;
+  return `<div class="pass"><span class="who" style="font-size:1.6rem">${esc(name)}</span></div>${secretCard(g, name)}
+    <button class="btn" data-a="reveal-next">${last ? 'הסתרה ומעבר לסבב המילים' : 'הסתרה והעברה הלאה'}</button>`;
+}
+
+function vClues(g){
+  const host = isHost();
+  return `<h2>סבב מילים</h2>
+    <p class="muted">כל אחד אומר בקול מילה אחת שקשורה למילה הסודית, לפי הסדר. אפשר לעשות יותר מסיבוב אחד.</p>
+    <ol class="order">${g.order.map(p => `<li>${av(g, p)}<span>${esc(p)}</span></li>`).join('')}</ol>
+    ${peekCard(g)}
+    ${host ? '<button class="btn" data-a="to-vote">עוברים להצבעה</button>' : '<p class="muted center small">המארח יעביר להצבעה בסוף הסבב.</p>'}`;
+}
+
+function peekCard(g){
+  if (!isOnline() || !S.o.myName) return '';
+  return `<button class="btn alt" data-a="peek" aria-expanded="${S.peek}">${S.peek ? 'הסתרת הכרטיס שלי' : 'להציץ שוב בכרטיס שלי'}</button>${S.peek ? secretCard(g, S.o.myName, true) : ''}`;
+}
+
+function targetsPicker(g, voter){
+  const opts = g.players.filter(p => p !== voter).map(p => `<button class="target" data-a="vote-pick" data-p="${esc(p)}" aria-pressed="${S.vote.pick === p}">${av(g, p)}<span>${esc(p)}</span></button>`).join('');
+  return `<div class="targets">${opts}</div>
+    <button class="btn" data-a="vote-confirm" ${S.vote.pick ? '' : 'disabled'}>${S.vote.pick ? 'מצביעים נגד ' + esc(S.vote.pick) : 'בחרו מישהו'}</button>`;
+}
+
+function vVote(g){
+  if (!isOnline()) {
+    const voter = g.players[g.voteIdx];
+    if (!S.vote.ready) return `<h2>הצבעה סודית</h2>
+      <div class="pass"><span class="tag">מצביע ${g.voteIdx + 1} מתוך ${g.players.length}</span><span class="muted">העבירו את הטלפון ל</span><span class="who">${esc(voter)}</span></div>
+      <button class="btn" data-a="vote-ready">אני ${esc(voter)}, אני מוכן/ה להצביע</button>`;
+    return `<h2>${esc(voter)}, מי המתחזה?</h2>${targetsPicker(g, voter)}`;
+  }
+  const votes = onlineVotes(g); const me = S.o.myName; const host = isHost();
+  const doneCount = g.players.filter(p => p in votes).length;
+  let mine;
+  if (S.vote.forPlayer) mine = `<div class="panel"><h3>הצבעה בשם ${esc(S.vote.forPlayer)}</h3>${targetsPicker(g, S.vote.forPlayer)}<button class="btn ghost" data-a="vote-cancel">ביטול</button></div>`;
+  else if ((me in votes) && !S.vote.changing) mine = `<div class="panel center"><h3>ההצבעה שלך נקלטה</h3><p class="muted small">הצבעת נגד ${esc(votes[me])}. אפשר לשנות עד שהמארח חושף את התוצאות.</p><button class="btn alt" data-a="vote-change">שינוי הצבעה</button></div>`;
+  else mine = `<h2>מי המתחזה?</h2>${targetsPicker(g, me)}`;
+  const status = `<div class="status">${g.players.map(p => (p in votes) ? `<span class="done">${esc(p)} ✓</span>` : (host && p !== me ? `<button data-a="vote-for" data-p="${esc(p)}">${esc(p)}: הצבעה בשמו</button>` : `<span>${esc(p)}</span>`)).join('')}</div>`;
+  return `${mine}
+    ${peekCard(g)}
+    ${S.o.voteErr ? `<p class="err">${esc(S.o.voteErr)}</p>` : ''}
+    <div class="panel"><h3>הצביעו ${doneCount} מתוך ${g.players.length}</h3>${status}
+    ${host ? `<p class="muted small">שחקן שלא יכול להצביע מהטלפון שלו? לחצו על השם שלו והצביעו בשבילו.</p>
+      <button class="btn" data-a="reveal-votes" ${doneCount ? '' : 'disabled'}>${doneCount === g.players.length ? 'חשיפת התוצאות' : 'חשיפת התוצאות בלי כולם'}</button>` : ''}</div>`;
+}
+
+function vGuess(g){
+  const host = isHost();
+  return `<div class="banner win"><span class="tag" style="color:inherit;opacity:.85">נתפס!</span><h2>${esc(g.impostor)} הוא המתחזה</h2><p>יש לו ניחוש אחד: מה המילה הסודית?</p></div>
+    ${votesTable(g, false)}
+    ${host ? (S.guessShown
+      ? `<div class="secret word${S.anim === 'in' ? ' reveal-in' : ''}" style="min-height:0"><span class="label">המילה הייתה</span><span class="big">${esc(g.word)}</span></div>
+         <div class="row"><button class="btn ok" style="flex:1" data-a="guess" data-v="1">ניחש נכון</button><button class="btn alt" style="flex:1" data-a="guess" data-v="0">טעה</button></div>`
+      : `<p class="muted center">קודם ${esc(g.impostor)} אומר את הניחוש בקול, ואז חושפים.</p><button class="btn" data-a="guess-show">חשיפת המילה</button>`)
+      : '<p class="muted center">המארח יחשוף את המילה ויסמן אם הניחוש נכון.</p>'}`;
+}
+
+function votesTable(g, withDelta){
+  const t = tally(g).c;
+  const rows = g.players.slice().sort((a, b) => t[b] - t[a]).map(p => `
+    <tr class="${p === g.impostor && (withDelta || g.phase === 'guess') ? 'is-imp' : ''}"><td>${esc(p)}</td><td class="num">${t[p]}</td><td>${esc((g.votes || {})[p] || '—')}</td></tr>`).join('');
+  return `<div class="tablewrap"><table><thead><tr><th>שחקן</th><th class="num">קולות נגדו</th><th>הצביע נגד</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function vResult(g){
+  const host = isHost(); const outcome = tally(g).outcome;
+  const tag = t => `<span class="tag" style="color:inherit;opacity:.85">${t}</span>`;
+  let head;
+  if (outcome === 'caught' && g.guessed) head = `<div class="banner lose">${tag('נתפס, אבל ניחש')}<h2>${esc(g.impostor)} ניחש את המילה</h2></div>`;
+  else if (outcome === 'caught') head = `<div class="banner win">${CONFETTI}${tag('תפסתם אותו')}<h2>${esc(g.impostor)} היה המתחזה</h2></div>`;
+  else if (outcome === 'tie') head = `<div class="banner lose">${tag('תיקו בהצבעה')}<h2>${esc(g.impostor)} היה המתחזה</h2></div>`;
+  else head = `<div class="banner lose">${tag('המתחזה ניצח')}<h2>${esc(g.impostor)} הצליח להתחבא</h2></div>`;
+  let foot;
+  if (isSeries(g)) {
+    const last = g.round >= g.totalRounds;
+    foot = `<div class="panel center"><p>${last ? 'התוצאות הסופיות בעוד' : 'הסבב הבא מתחיל בעוד'} <b class="countdown" data-countdown>${Math.max(0, Math.ceil((g.resultAt + PAUSE_MS - Date.now()) / 1000))}</b> שניות</p>
+      ${host ? `<button class="btn alt" data-a="advance">${last ? 'לתוצאות הסופיות עכשיו' : 'לסבב הבא עכשיו'}</button>` : ''}</div>`;
+  } else {
+    foot = host ? `<button class="btn" data-a="next-round">משחק נוסף</button><button class="btn alt" data-a="new-game">שינוי הגדרות</button>` : '<p class="muted center small">המנהל יפתח את המשחק הבא. מי שהחליף שם או הצטרף עכשיו ייכנס בו.</p>';
+  }
+  return `${head}
+    <div class="panel"><div class="row" style="justify-content:space-between"><span><span class="muted small">המילה</span><br><b style="font-family:var(--f-display);font-size:1.5rem;font-weight:400">${esc(g.word)}</b></span><span><span class="muted small">הרמז של המתחזה</span><br><b style="font-family:var(--f-display);font-size:1.5rem;font-weight:400">${esc(g.hint)}</b></span><span><span class="muted small">קטגוריה</span><br><b>${esc(g.category)}</b></span></div></div>
+    <h3>ההצבעות</h3>${votesTable(g, true)}
+    ${foot}`;
+}
+
+function vFinal(g){
+  const host = isHost();
+  const sorted = g.players.slice().sort((a, b) => (g.scores[b] || 0) - (g.scores[a] || 0));
+  const top = g.scores[sorted[0]] || 0;
+  const winners = sorted.filter(p => (g.scores[p] || 0) === top);
+  const sb = sorted.map(p => `<tr class="${winners.indexOf(p) >= 0 ? 'is-imp' : ''}"><td>${esc(p)}</td><td class="num"><b>${g.scores[p] || 0}</b></td></tr>`).join('');
+  return `<div class="banner win">${CONFETTI}<span class="tag" style="color:inherit;opacity:.85">הסדרה הסתיימה · ${esc(g.totalRounds)} סבבים</span>
+      <h2>${winners.length > 1 ? 'תיקו בין ' + winners.map(esc).join(' ו') : esc(winners[0]) + ' ניצח'}</h2><p>${top} נקודות</p></div>
+    <h3>טבלת ניקוד</h3><div class="tablewrap"><table><thead><tr><th>שחקן</th><th class="num">נקודות</th></tr></thead><tbody>${sb}</tbody></table></div>
+    ${host ? '<button class="btn" data-a="replay-series">סדרה חדשה עם אותם שחקנים</button><button class="btn alt" data-a="new-game">שינוי הגדרות</button>' : '<p class="muted center small">המנהל יכול לפתוח סדרה חדשה.</p>'}`;
+}
+
+function vLobby(g){
+  const host = isHost();
+  const names = lobbyNames().players;
+  const fake = { players: names };
+  const inLobby = S.o.lobby.some(p => p.pid === PID);
+  return `<div class="topbar"><span>${isSeries(g) ? `סדרה של ${esc(g.totalRounds)} סבבים` : 'משחק בודד'}</span><button class="btn ghost" style="width:auto" data-a="leave">יציאה</button></div>
+    <div class="panel center"><p class="muted small">קוד ההצטרפות</p><div class="bigcode">${esc(S.o.code)}</div>
+      <p class="muted small">כל שחקן פותח את העמוד בטלפון שלו, כותב את השם שלו ומקליד את הקוד.</p></div>
+    <h2>מי כבר כאן (${names.length})</h2>
+    ${names.length ? `<div class="targets">${names.map(n => `<div class="target">${av(fake, n)}<span>${esc(n)}</span></div>`).join('')}</div>` : '<p class="muted">עוד אף אחד לא הצטרף.</p>'}
+    ${!inLobby && !S.o.error ? '<p class="muted small center">מצטרפים…</p>' : ''}
+    ${host ? `<button class="btn" data-a="lobby-start" ${names.length >= 3 ? '' : 'disabled'}>${names.length >= 3 ? 'כולם כאן, מתחילים' : 'צריך לפחות 3 שחקנים'}</button>`
+           : '<p class="muted center">מחכים שהמנהל יתחיל את המשחק.</p>'}`;
+}
+
+function vPickName(g){
+  return `<div class="topbar"><span>קוד <span class="code">${esc(S.o.code)}</span></span><button class="btn ghost" style="width:auto" data-a="leave">יציאה</button></div>
+    ${isHost() ? `<div class="panel center"><p class="muted small">זה הקוד שהשחקנים צריכים להקליד:</p><div class="bigcode">${esc(S.o.code)}</div></div>` : ''}
+    <h2>מי את/ה?</h2><p class="muted">בחרו את השם שלכם כדי לקבל את הכרטיס שלכם.</p>
+    <div class="targets">${g.players.map(p => `<button class="target" data-a="pick-name" data-p="${esc(p)}">${av(g, p)}<span>${esc(p)}</span></button>`).join('')}</div>`;
+}
+
+function vGame(){
+  const on = isOnline();
+  if (on) {
+    const o = S.o;
+    if (!o.game) {
+      return `<div class="hero">${MASK}<h2>${o.error ? 'אין חיבור למשחק' : 'מתחברים למשחק…'}</h2>${o.error ? `<p class="err">${esc(o.error)}</p>` : ''}</div>
+        <button class="btn alt" data-a="leave">חזרה למסך הראשי</button>`;
+    }
+    if (o.game.phase === 'lobby') return vLobby(o.game) + (o.error ? `<p class="err">${esc(o.error)}</p>` : '');
+    if (!o.myName) return `<div class="hero">${MASK}<h2>המשחק כבר באמצע</h2><p class="muted">נכנסת לרשימה בתור <b>${esc(myTypedName())}</b>. כשהמנהל יפתח את המשחק הבא, תהיו בו.</p></div>
+        <button class="btn alt" data-a="leave">חזרה למסך הראשי</button>`;
+  }
+  const g = G();
+  if (!g) { S.view = 'home'; return vHome(); }
+  let body = '';
+  if (g.phase === 'reveal') body = vReveal(g);
+  else if (g.phase === 'clues') body = vClues(g);
+  else if (g.phase === 'vote') body = vVote(g);
+  else if (g.phase === 'guess') body = vGuess(g);
+  else if (g.phase === 'final') body = vFinal(g);
+  else body = vResult(g);
+  const hostCode = on && isHost() && g.phase === 'reveal' ? `<div class="panel center"><p class="muted small">קוד ההצטרפות לשחקנים</p><div class="bigcode">${esc(S.o.code)}</div></div>` : '';
+  return topbar(g) + hostCode + body + (on && S.o.error ? `<p class="err">${esc(S.o.error)}</p>` : '');
+}
+
+function render(){
+  let h;
+  if (S.view === 'setup') h = vSetup();
+  else if (S.view === 'join') h = vJoin();
+  else if (S.view === 'mgr') h = vMgr();
+  else if (S.view === 'game') h = vGame();
+  else h = vHome();
+  $app.innerHTML = h;
+  S.anim = null;
+  document.documentElement.dataset.scene = scene();
+}
+
+/* ---------- actions ---------- */
+function startGame(){
+  const st = S.setup;
+  const online = st.mode === 'online';
+  const names = st.players.map(p => p.trim()).filter(Boolean);
+  if (online) {
+    if (!myTypedName()) { S.setupErr = 'כתבו את השם שלכם.'; return render(); }
+  } else {
+    if (names.length < 3) { S.setupErr = 'צריך לפחות 3 שחקנים עם שם.'; return render(); }
+    if (new Set(names).size !== names.length) { S.setupErr = 'יש שני שחקנים עם אותו שם. שנו אחד מהם.'; return render(); }
+  }
+  if (st.catMode === 'pick' && !st.cats.length) { S.setupErr = 'בחרו לפחות קטגוריה אחת.'; return render(); }
+  S.setupErr = '';
+  if (S.reuse && !online) A.leave(); /* the manager switched this room to one phone */
+  S.mode = online ? 'online' : 'local';
+  const base = { players: [], scores: {}, catMode: st.catMode, cats: st.cats.slice(), used: [], round: 0, totalRounds: st.series === 'series' ? st.rounds : 0 };
+  resetEphemeral();
+  if (!online) {
+    base.players = names; names.forEach(n => base.scores[n] = 0);
+    S.view = 'game'; commit(newRound(base)); return;
+  }
+  base.hostId = S.o.myId || null;
+  base.phase = 'lobby';
+  if (S.reuse && S.o.code && S.o.game) {
+    /* same room, same code: everyone connected goes straight back to the waiting room */
+    const code = S.o.code; S.reuse = false; S.view = 'game';
+    commit(base);
+    writing = writing.then(() => joinLobby(code));
+    return;
+  }
+  const code = String(1000 + Math.floor(Math.random() * 9000));
+  S.o.host = true; S.o.myName = null; S.o.code = code; saveSession();
+  if (S.o.db.hostRoom) S.o.db.hostRoom(code);
+  subscribe(code);
+  S.view = 'game';
+  commit(base);
+  writing = writing.then(() => joinLobby(code));
+}
+function startFromLobby(){
+  const r = lobbyRoster(); if (!r) return;
+  commit(newRound(Object.assign({}, G(), r, { round: 0 })));
+}
+/* a new game online: whoever is in the room now, under the name they chose now */
+function nextOnlineGame(){
+  const g = G(); const r = lobbyRoster();
+  if (!r) return commit(Object.assign({}, g, { phase: 'lobby' }));
+  commit(newRound(Object.assign({}, g, r, { round: 0 })));
+}
+
+const A = {
+  home(){ S.view = 'home'; S.setupErr = ''; S.o.error = ''; render(); },
+  open(){ S.view = S.mgr ? 'setup' : 'mgr'; S.mgrErr = ''; render(); if (!S.mgr) setTimeout(() => { const i = document.getElementById('mgrcode'); if (i) i.focus(); }, 0); },
+  async 'mgr-go'(){
+    if (await checkMgr(S.mgrCode)) { S.mgr = true; store.set('mgr', true); S.mgrCode = ''; S.mgrErr = ''; S.view = 'setup'; }
+    else S.mgrErr = 'הקוד לא נכון.';
+    render();
+  },
+  'mgr-off'(){ S.mgr = false; store.del('mgr'); render(); },
+  'set-mode'(el){ S.setup.mode = el.dataset.v; store.set('setup', S.setup); render(); },
+  'set-series'(el){ S.setup.series = el.dataset.v; store.set('setup', S.setup); render(); },
+  'set-rounds'(el){ S.setup.rounds = +el.dataset.v; store.set('setup', S.setup); render(); },
+  advance(){ const g = G(); if (g && g.phase === 'result' && isSeries(g)) commit(advanceSeries(g)); },
+  'replay-series'(){
+    if (isOnline()) return nextOnlineGame();
+    const g = G(); const scores = {}; g.players.forEach(p => scores[p] = 0);
+    commit(newRound(Object.assign({}, g, { scores, round: 0 })));
+  },
+  'continue-local'(){ S.mode = 'local'; S.view = 'game'; resetEphemeral(); render(); },
+  'discard-local'(){ S.local = null; store.del('localGame'); render(); },
+  'lobby-start': startFromLobby,
+  'online-join'(){
+    if (!myTypedName()) { S.homeErr = 'כתבו קודם את השם שלכם.'; render(); const i = document.getElementById('myname'); if (i) i.focus(); return; }
+    S.homeErr = ''; S.mode = 'online'; S.o.error = ''; S.view = 'join'; render(); setTimeout(() => { const i = document.getElementById('joincode'); if (i) i.focus(); }, 0); },
+  'add-player'(){ S.setup.players.push(''); store.set('setup', S.setup); render(); const i = document.getElementById('p' + (S.setup.players.length - 1)); if (i) i.focus(); },
+  'del-player'(el){ S.setup.players.splice(+el.dataset.i, 1); store.set('setup', S.setup); render(); },
+  'cat-mode'(el){ S.setup.catMode = el.dataset.v; store.set('setup', S.setup); render(); },
+  'toggle-cat'(el){ const c = el.dataset.c, a = S.setup.cats, i = a.indexOf(c); if (i >= 0) a.splice(i, 1); else a.push(c); store.set('setup', S.setup); render(); },
+  start: startGame,
+  'join-go'(){
+    const code = (S.joinCode || '').replace(/\D/g, '');
+    if (code.length !== 4) { S.o.error = 'הקוד הוא 4 ספרות.'; return render(); }
+    S.o.host = false; S.o.myName = null; S.view = 'game'; subscribe(code); saveSession(); render();
+    joinLobby(code);
+  },
+  leave(){
+    if (isOnline()) {
+      if (S.o.db && S.o.code) S.o.db.doc('games/' + S.o.code + '/players/' + PID).delete().catch(() => {});
+      unsubAll(); store.del('onlineSession'); flushLeave(null); S.reuse = false;
+      if (S.o.db && S.o.db.leave && S.o.code) {
+        const d = S.o.db, code = S.o.code;
+        pendingLeave = { code, run: () => d.leave(code) }; pendingLeave.t = setTimeout(() => { pendingLeave = null; d.leave(code); }, 400);
+      } S.o.game = null; S.o.code = null; S.o.myName = null; S.o.host = false; S.o.error = ''; }
+    S.view = 'home'; resetEphemeral(); render();
+  },
+  reveal(el){
+    if (!el || reducedMotion() || !el.classList.contains('back')) { S.reveal = true; S.anim = 'in'; render(); return; }
+    if (turning) return;
+    turning = true; turnCard(el, 1.5);
+    setTimeout(() => { turning = false; S.reveal = true; S.anim = 'in'; render(); }, TURN_MS);
+  },
+  hide(){ turnAway(() => { S.reveal = false; S.anim = 'back'; render(); }); },
+  peek(){
+    if (S.peek) turnAway(() => { S.peek = false; render(); });
+    else { S.peek = true; S.anim = 'in'; render(); }
+  },
+  'reveal-next'(){ turnAway(A['reveal-next-now']); },
+  'reveal-next-now'(){
+    const g = G(); S.reveal = false; S.anim = 'back';
+    if (g.revealIdx >= g.players.length - 1) commit(Object.assign({}, g, { phase: 'clues' }));
+    else commit(Object.assign({}, g, { revealIdx: g.revealIdx + 1 }));
+  },
+  'to-clues'(){ commit(Object.assign({}, G(), { phase: 'clues' })); },
+  'to-vote'(){ commit(Object.assign({}, G(), { phase: 'vote', votes: {}, voteIdx: 0 })); },
+  'vote-ready'(){ S.vote.ready = true; render(); },
+  'vote-pick'(el){ S.vote.pick = el.dataset.p; render(); },
+  'vote-for'(el){ S.vote = { ready: true, pick: null, forPlayer: el.dataset.p }; render(); },
+  'vote-cancel'(){ S.vote = { ready: false, pick: null, forPlayer: null }; render(); },
+  'vote-change'(){ S.vote = { ready: true, pick: null, forPlayer: null, changing: true }; render(); },
+  'vote-confirm'(){
+    const g = G(); const pick = S.vote.pick; if (!pick) return;
+    if (!isOnline()) {
+      const voter = g.players[g.voteIdx];
+      const votes = Object.assign({}, g.votes); votes[voter] = pick;
+      S.vote = { ready: false, pick: null, forPlayer: null };
+      const ng = Object.assign({}, g, { votes, voteIdx: g.voteIdx + 1 });
+      commit(ng.voteIdx >= g.players.length ? finishVoting(ng) : ng);
+      return;
+    }
+    castOnlineVote(S.vote.forPlayer || S.o.myName, pick);
+  },
+  'reveal-votes'(){ const g = G(); commit(finishVoting(Object.assign({}, g, { votes: onlineVotes(g) }))); },
+  'guess-show'(){ S.guessShown = true; S.anim = 'in'; render(); },
+  guess(el){ commit(resolveGuess(G(), el.dataset.v === '1')); },
+  'next-round'(){ if (isOnline()) nextOnlineGame(); else commit(newRound(G())); },
+  'new-game'(){
+    const g = G();
+    if (isOnline()) { S.reuse = true; S.setup.mode = 'online'; }
+    else { S.local = null; store.del('localGame'); S.setup.players = g.players.slice(); }
+    store.set('setup', S.setup);
+    S.setupErr = ''; S.view = 'setup'; render();
+  },
+  'setup-back'(){
+    if (S.reuse) { S.reuse = false; S.view = 'game'; render(); } else A.home();
+  }
+};
+
+/* turn the open card over before hiding it, like a real card */
+let turning = false;
+const TURN_MS = 230;
+function turnCard(el, fromTilt){
+  /* turn this card to its edge; driven from script so every phone browser plays it */
+  const kf = [
+    { transform: `perspective(900px) rotateY(0deg) rotate(${fromTilt}deg)` },
+    { transform: 'perspective(900px) rotateY(90deg) rotate(0deg) scale(1.04)' }];
+  el.style.pointerEvents = 'none';
+  if (el.animate) { el.style.animation = 'none'; el.animate(kf, { duration: TURN_MS, easing: 'cubic-bezier(.5,0,.9,.6)', fill: 'forwards' }); }
+  else el.classList.add(el.classList.contains('back') ? 'flipping' : 'turning');
+}
+function turnAway(then){
+  const f = document.querySelector('.secret.word, .secret.imp');
+  if (!f || reducedMotion()) return then();
+  if (turning) return;
+  turning = true; turnCard(f, -1.5);
+  setTimeout(() => { turning = false; then(); }, TURN_MS);
+}
+function reducedMotion(){ try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch(e) { return false; } }
+/* open and close a section smoothly instead of all at once */
+function slideDetails(d){
+  if (d.dataset.anim) return;
+  const from = d.offsetHeight;
+  const opening = !d.open;
+  d.open = true; const full = d.offsetHeight;
+  d.open = false; const closed = d.offsetHeight;
+  d.open = true;
+  d.dataset.anim = '1'; d.style.overflow = 'hidden';
+  const ms = opening ? 380 : 260;
+  const a = d.animate([{ height: from + 'px' }, { height: (opening ? full : closed) + 'px' }], { duration: ms, easing: 'cubic-bezier(.2,.8,.3,1)' });
+  const done = () => { if (!d.dataset.anim) return; try { a.cancel(); } catch(e) {} d.open = opening; d.style.overflow = ''; delete d.dataset.anim; };
+  a.onfinish = done; setTimeout(done, ms + 80);
+}
+$app.addEventListener('click', e => {
+  const sum = e.target.closest('summary');
+  if (sum && sum.parentElement.tagName === 'DETAILS' && !reducedMotion() && sum.parentElement.animate) { e.preventDefault(); slideDetails(sum.parentElement); return; }
+  const el = e.target.closest('[data-a]'); if (!el || el.disabled) return;
+  const f = A[el.dataset.a]; if (f) f(el);
+});
+$app.addEventListener('input', e => {
+  const el = e.target;
+  if (el.dataset.in === 'player') { S.setup.players[+el.dataset.i] = el.value; store.set('setup', S.setup); }
+  else if (el.dataset.in === 'mgr') { S.mgrCode = el.value; }
+  else if (el.dataset.in === 'myname') { S.myNameInput = el.value; store.set('myName', el.value); if (S.homeErr && el.value.trim()) { S.homeErr = ''; } }
+  else if (el.dataset.in === 'code') { S.joinCode = el.value.replace(/\D/g, '').slice(0, 4); if (el.value !== S.joinCode) el.value = S.joinCode; }
+});
+$app.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  if (e.target.dataset.in === 'code') A['join-go']();
+  else if (e.target.dataset.in === 'mgr') A['mgr-go']();
+  else if (e.target.dataset.in === 'player') A['add-player']();
+});
+
+/* ---------- series countdown ---------- */
+let advancing = false;
+setInterval(() => {
+  const g = G();
+  if (S.view !== 'game' || !g || g.phase !== 'result' || !isSeries(g)) { advancing = false; return; }
+  const left = Math.min(PAUSE_MS / 1000, Math.max(0, Math.ceil((g.resultAt + PAUSE_MS - Date.now()) / 1000)));
+  const el = document.querySelector('[data-countdown]'); if (el && el.textContent !== String(left)) el.textContent = left;
+  if (left <= 0 && isHost() && !advancing) { advancing = true; commit(advanceSeries(g)); }
+}, 250);
+
+/* ---------- boot ---------- */
+async function init(){
+  if (S.local && S.local.phase) { /* keep on home; user can continue */ }
+  render();
+  const c = window.claude;
+  if (window.PeerDb) { S.o.db = window.PeerDb; S.o.canWrite = true; }
+  else if (c && typeof c.use === 'function') {
+    try {
+      const res = await Promise.all([c.use('db'), c.use('user')]);
+      S.o.db = res[0];
+      const user = res[1];
+      if (user) { S.o.myId = await user.id(); S.o.canWrite = await user.can('data.write'); }
+    } catch(e) {}
+  }
+  S.o.ready = true;
+  const sess = store.get('onlineSession', null);
+  if (sess && sess.code && S.o.db && S.view === 'home') {
+    S.mode = 'online'; S.o.host = !!sess.host; S.view = 'game';
+    if (sess.host && S.o.db.hostRoom) S.o.db.hostRoom(sess.code);
+    subscribe(sess.code);
+  }
+  render();
+}
+init();
+})();
+</script>
+
+<script>
+// No zooming. iPhone Safari ignores user-scalable=no, so block its pinch and double-tap gestures here too.
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
+document.addEventListener('touchmove', e => { if (e.touches.length > 1 || (e.scale && e.scale !== 1)) e.preventDefault(); }, { passive: false });
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  window.addEventListener('load', () => navigator.serviceWorker.register('../sw.js').catch(() => {}));
+}
+</script>
+</body>
+</html>
