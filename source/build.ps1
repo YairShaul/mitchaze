@@ -11,6 +11,26 @@ $rows = Get-Content -Encoding UTF8 (Join-Path $root 'words.csv') | Select-Object
   ForEach-Object { ,@($_.Split(',') | ForEach-Object { $_.Trim() }) }
 $json = (ConvertTo-Json -InputObject @($rows) -Compress -Depth 3).Replace('<', '<')
 $page = (& $read 'impostor.src.html').Replace('/*WORDS*/', $json)
+
+# The logo (logo.jpg), shrunk and embedded so the page stays one file
+Add-Type -AssemblyName System.Drawing
+$logo = [Drawing.Image]::FromFile((Join-Path $root 'logo.jpg'))
+function Get-Jpeg([Drawing.Image]$img, [int]$w, [int]$h, [int]$sx, [int]$sy, [int]$sw, [int]$sh, [int]$canvas = 0, [Drawing.Color]$bg = [Drawing.Color]::Black) {
+  $cw = if ($canvas) { $canvas } else { $w }; $ch = if ($canvas) { $canvas } else { $h }
+  $bmp = New-Object Drawing.Bitmap $cw, $ch
+  $g = [Drawing.Graphics]::FromImage($bmp)
+  $g.InterpolationMode = 'HighQualityBicubic'; $g.SmoothingMode = 'AntiAlias'; $g.PixelOffsetMode = 'HighQuality'
+  $g.Clear($bg)
+  $g.DrawImage($img, (New-Object Drawing.Rectangle ([int](($cw - $w) / 2)), ([int](($ch - $h) / 2)), $w, $h), $sx, $sy, $sw, $sh, [Drawing.GraphicsUnit]::Pixel)
+  $g.Dispose(); return $bmp
+}
+$small = Get-Jpeg $logo 560 573 0 0 $logo.Width $logo.Height
+$codec = [Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+$ep = New-Object Drawing.Imaging.EncoderParameters 1
+$ep.Param[0] = New-Object Drawing.Imaging.EncoderParameter ([Drawing.Imaging.Encoder]::Quality), 82L
+$ms = New-Object IO.MemoryStream
+$small.Save($ms, $codec, $ep); $small.Dispose()
+$page = $page.Replace('/*LOGO*/', 'data:image/jpeg;base64,' + [Convert]::ToBase64String($ms.ToArray()))
 [IO.File]::WriteAllText((Join-Path $root 'impostor.html'), $page, $enc)
 
 $site = if ($Out) { $Out } else { Join-Path $root 'site' }
@@ -20,42 +40,18 @@ $webPage = $page.Replace('<meta name="claude:viewport-fit-sides" content="cover"
 [IO.File]::WriteAllText((Join-Path $site 'index.html'), $head + $webPage + (& $read 'web\foot.html'), $enc)
 Copy-Item (Join-Path $root 'web\manifest.webmanifest'), (Join-Path $root 'web\sw.js') $site -Force
 
-# App icons: the pink carnival mask on sun yellow
-Add-Type -AssemblyName System.Drawing
-function New-Icon([int]$size, [string]$path) {
-  $bmp = New-Object Drawing.Bitmap $size, $size
-  $g = [Drawing.Graphics]::FromImage($bmp)
-  $g.SmoothingMode = 'AntiAlias'
-  $g.Clear([Drawing.Color]::FromArgb(255, 255, 212, 0))
-  $s = $size / 64.0
-  $ink = [Drawing.Color]::FromArgb(255, 27, 11, 58)
-  $pink = [Drawing.Color]::FromArgb(255, 230, 0, 126)
-  $yellow = [Drawing.Color]::FromArgb(255, 255, 212, 0)
-  $mask = {
-    param([float]$dx, [float]$dy)
-    $p = New-Object Drawing.Drawing2D.GraphicsPath
-    $o = 9; $yo = 16
-    $pts = @(
-      @(3,7, 12,2, 22,3, 32,10), @(32,10, 42,3, 52,2, 61,7),
-      @(61,7, 63,18, 59,28, 49,30), @(49,30, 41,31, 36,27, 32,22),
-      @(32,22, 28,27, 23,31, 15,30), @(15,30, 5,28, 1,18, 3,7))
-    foreach ($b in $pts) {
-      $p.AddBezier((($b[0] * 0.8 + $o) * $s + $dx), (($b[1] * 0.8 + $yo) * $s + $dy), (($b[2] * 0.8 + $o) * $s + $dx), (($b[3] * 0.8 + $yo) * $s + $dy),
-                   (($b[4] * 0.8 + $o) * $s + $dx), (($b[5] * 0.8 + $yo) * $s + $dy), (($b[6] * 0.8 + $o) * $s + $dx), (($b[7] * 0.8 + $yo) * $s + $dy))
-    }
-    $p.CloseFigure(); return $p
-  }
-  $sh = & $mask (3 * $s) (3 * $s)
-  $g.FillPath((New-Object Drawing.SolidBrush $ink), $sh)
-  $m = & $mask 0 0
-  $g.FillPath((New-Object Drawing.SolidBrush $pink), $m)
-  $yb = New-Object Drawing.SolidBrush $yellow
-  $g.FillEllipse($yb, [float]((19 * 0.8 + 9 - 5.2) * $s), [float]((16 * 0.8 + 16 - 3.4) * $s), [float](10.4 * $s), [float](6.8 * $s))
-  $g.FillEllipse($yb, [float]((45 * 0.8 + 9 - 5.2) * $s), [float]((16 * 0.8 + 16 - 3.4) * $s), [float](10.4 * $s), [float](6.8 * $s))
-  $bmp.Save($path, [Drawing.Imaging.ImageFormat]::Png)
-  $g.Dispose(); $bmp.Dispose()
+# App icons: the logo, cropped square (and with room around it for round/maskable icons)
+$navy = [Drawing.Color]::FromArgb(255, 7, 21, 47)
+$sq = [Math]::Min($logo.Width, $logo.Height)
+$top = [int](($logo.Height - $sq) / 2)
+function Save-Icon([int]$size, [string]$path, [double]$fill = 1.0) {
+  $d = [int]($size * $fill)
+  $bmp = Get-Jpeg $logo $d $d 0 $top $sq $sq $size $navy
+  $bmp.Save($path, [Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
 }
-New-Icon 192 (Join-Path $site 'icon-192.png')
-New-Icon 512 (Join-Path $site 'icon-512.png')
-New-Icon 180 (Join-Path $site 'apple-touch-icon.png')
+Save-Icon 192 (Join-Path $site 'icon-192.png')
+Save-Icon 512 (Join-Path $site 'icon-512.png')
+Save-Icon 512 (Join-Path $site 'icon-maskable.png') 0.8
+Save-Icon 180 (Join-Path $site 'apple-touch-icon.png')
+$logo.Dispose()
 "built: impostor.html, site\ ($((Get-ChildItem $site).Name -join ', '))"
