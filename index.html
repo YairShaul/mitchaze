@@ -232,9 +232,19 @@ input[type=text],input[type=tel]{font:inherit;font-weight:600;width:100%;min-wid
 .secret .big{font-family:var(--f-display);font-size:clamp(2.4rem,12vw,3.6rem);line-height:1.1;word-break:break-word}
 .secret.imp .big{color:var(--violet)}
 .secret .note{font-size:.95rem;color:var(--ink-muted);max-width:30ch}
-.reveal-in{animation:flip .32s cubic-bezier(.2,1.4,.4,1)}
-@keyframes flip{from{transform:rotate(6deg) scale(.85)}to{transform:rotate(-1.5deg) scale(1)}}
-@media (prefers-reduced-motion:reduce){.reveal-in{animation:none}body{transition:none}.btn,.choice{transition:none}}
+/* turning the card over: the back turns away to its edge, then the face turns in */
+.secret.back.flipping{animation:flip-away .22s cubic-bezier(.5,0,.9,.6) forwards;pointer-events:none}
+@keyframes flip-away{from{transform:perspective(900px) rotateY(0) rotate(1.5deg)}to{transform:perspective(900px) rotateY(90deg) rotate(0) scale(1.04)}}
+.reveal-in{animation:flip .5s cubic-bezier(.2,.9,.3,1.2)}
+@keyframes flip{from{transform:perspective(900px) rotateY(-90deg) rotate(0) scale(1.04)}to{transform:perspective(900px) rotateY(0) rotate(-1.5deg) scale(1)}}
+/* opening sections */
+summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"";flex:none;width:9px;height:9px;margin:-4px 4px 0;border-inline-end:3px solid currentColor;border-bottom:3px solid currentColor;transform:rotate(45deg);transition:transform .3s ease,margin .3s ease}
+details[open]>summary::after{transform:rotate(225deg);margin-top:4px}
+details[open]>:not(summary){animation:unfold .35s ease-out both}
+@keyframes unfold{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.reveal-in,.secret.back.flipping,details[open]>:not(summary){animation:none}summary::after{transition:none}body{transition:none}.btn,.choice{transition:none}}
 
 .pass{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:6px 0}
 .pass .who{font-family:var(--f-display);font-size:2.6rem;color:var(--fg);word-break:break-word;line-height:1.1}
@@ -886,7 +896,12 @@ const A = {
       } S.o.game = null; S.o.code = null; S.o.myName = null; S.o.host = false; S.o.error = ''; }
     S.view = 'home'; resetEphemeral(); render();
   },
-  reveal(){ S.reveal = true; render(); },
+  reveal(el){
+    if (!el || reducedMotion() || !el.classList.contains('back')) { S.reveal = true; render(); return; }
+    if (el.classList.contains('flipping')) return;
+    el.classList.add('flipping');
+    setTimeout(() => { S.reveal = true; render(); }, 220);
+  },
   hide(){ S.reveal = false; render(); },
   peek(){ S.peek = !S.peek; render(); },
   'reveal-next'(){
@@ -929,7 +944,24 @@ const A = {
   }
 };
 
+function reducedMotion(){ try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch(e) { return false; } }
+/* open and close a section smoothly instead of all at once */
+function slideDetails(d){
+  if (d.dataset.anim) return;
+  const from = d.offsetHeight;
+  const opening = !d.open;
+  d.open = true; const full = d.offsetHeight;
+  d.open = false; const closed = d.offsetHeight;
+  d.open = true;
+  d.dataset.anim = '1'; d.style.overflow = 'hidden';
+  const ms = opening ? 380 : 260;
+  const a = d.animate([{ height: from + 'px' }, { height: (opening ? full : closed) + 'px' }], { duration: ms, easing: 'cubic-bezier(.2,.8,.3,1)' });
+  const done = () => { if (!d.dataset.anim) return; try { a.cancel(); } catch(e) {} d.open = opening; d.style.overflow = ''; delete d.dataset.anim; };
+  a.onfinish = done; setTimeout(done, ms + 80);
+}
 $app.addEventListener('click', e => {
+  const sum = e.target.closest('summary');
+  if (sum && sum.parentElement.tagName === 'DETAILS' && !reducedMotion() && sum.parentElement.animate) { e.preventDefault(); slideDetails(sum.parentElement); return; }
   const el = e.target.closest('[data-a]'); if (!el || el.disabled) return;
   const f = A[el.dataset.a]; if (f) f(el);
 });
