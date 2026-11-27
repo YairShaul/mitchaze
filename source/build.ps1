@@ -47,7 +47,14 @@ if (Test-Path $themeFile) {
   $em.Save($ms, $codec, $ep); $em.Dispose()
   $heroOld = '<div class="hero">${MASK}<h1>'
   if ($pv.IndexOf($heroOld) -lt 0) { throw 'home hero not found' }
-  $pv = $pv.Replace($heroOld, '<div class="hero"><img class="emblem" alt="" src="data:image/jpeg;base64,' + [Convert]::ToBase64String($ms.ToArray()) + '"><h1>')
+  $emUrl = 'data:image/jpeg;base64,' + [Convert]::ToBase64String($ms.ToArray())
+  $pv = $pv.Replace($heroOld, '<div class="hero"><img class="emblem" alt="" src="' + $emUrl + '"><h1>')
+  # every other mask (join, manager code, card back...) becomes the same detective badge, drawn by preview-theme.css
+  $pv = $pv.Replace('EMBLEM_URL', $emUrl)
+  $pv = [Regex]::Replace($pv, "const MASK = '<svg class=""mask""[^\n]*?</svg>';", "const MASK = '<span class=""mask badge"" aria-hidden=""true""></span>';")
+  if ($pv.IndexOf('class="mask badge"') -lt 0) { throw 'MASK not replaced' }
+  # the pink of the player stickers and the impostor's table row: the logo's red
+  $pv = $pv.Replace("['#E6007E','#FFFFFF']", "['#E11D48','#FFFFFF']").Replace('tr.is-imp td{background:#FFE3F2}', 'tr.is-imp td{background:#FFE4E8}')
   # player sticker colors: cyan instead of yellow
   $pv = $pv.Replace("['#FFD400','#1B0B3A']", "['#22D3EE','#1B0B3A']")
   $pdir = Join-Path $site 'preview'
