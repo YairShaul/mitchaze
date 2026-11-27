@@ -54,7 +54,7 @@ if (Test-Path $themeFile) {
   $pv = [Regex]::Replace($pv, "const MASK = '<svg class=""mask""[^\n]*?</svg>';", "const MASK = '<span class=""mask badge"" aria-hidden=""true""></span>';")
   if ($pv.IndexOf('class="mask badge"') -lt 0) { throw 'MASK not replaced' }
   # the pink of the player stickers and the impostor's table row: the logo's red
-  $pv = $pv.Replace("['#E6007E','#FFFFFF']", "['#E11D48','#FFFFFF']").Replace('tr.is-imp td{background:#FFE3F2}', 'tr.is-imp td{background:#FFE4E8}')
+  $pv = $pv.Replace("['#E6007E','#FFFFFF']", "['#9333EA','#FFFFFF']").Replace('tr.is-imp td{background:#FFE3F2}', 'tr.is-imp td{background:#F3E8FF}')
   # player sticker colors: cyan instead of yellow
   $pv = $pv.Replace("['#FFD400','#1B0B3A']", "['#22D3EE','#1B0B3A']")
   $pdir = Join-Path $site 'preview'
