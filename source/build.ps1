@@ -12,7 +12,7 @@ $rows = Get-Content -Encoding UTF8 (Join-Path $root 'words.csv') | Select-Object
 $json = (ConvertTo-Json -InputObject @($rows) -Compress -Depth 3).Replace('<', '<')
 $page = (& $read 'impostor.src.html').Replace('/*WORDS*/', $json)
 
-# The logo (logo.jpg), shrunk and embedded so the page stays one file
+# The logo (logo.jpg) is used only for the app icons below
 Add-Type -AssemblyName System.Drawing
 $logo = [Drawing.Image]::FromFile((Join-Path $root 'logo.jpg'))
 function Get-Jpeg([Drawing.Image]$img, [int]$w, [int]$h, [int]$sx, [int]$sy, [int]$sw, [int]$sh, [int]$canvas = 0, [Drawing.Color]$bg = [Drawing.Color]::Black) {
@@ -24,13 +24,6 @@ function Get-Jpeg([Drawing.Image]$img, [int]$w, [int]$h, [int]$sx, [int]$sy, [in
   $g.DrawImage($img, (New-Object Drawing.Rectangle ([int](($cw - $w) / 2)), ([int](($ch - $h) / 2)), $w, $h), $sx, $sy, $sw, $sh, [Drawing.GraphicsUnit]::Pixel)
   $g.Dispose(); return $bmp
 }
-$small = Get-Jpeg $logo 560 573 0 0 $logo.Width $logo.Height
-$codec = [Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
-$ep = New-Object Drawing.Imaging.EncoderParameters 1
-$ep.Param[0] = New-Object Drawing.Imaging.EncoderParameter ([Drawing.Imaging.Encoder]::Quality), 82L
-$ms = New-Object IO.MemoryStream
-$small.Save($ms, $codec, $ep); $small.Dispose()
-$page = $page.Replace('/*LOGO*/', 'data:image/jpeg;base64,' + [Convert]::ToBase64String($ms.ToArray()))
 [IO.File]::WriteAllText((Join-Path $root 'impostor.html'), $page, $enc)
 
 $site = if ($Out) { $Out } else { Join-Path $root 'site' }
