@@ -12,7 +12,7 @@ $rows = Get-Content -Encoding UTF8 (Join-Path $root 'words.csv') | Select-Object
 $json = (ConvertTo-Json -InputObject @($rows) -Compress -Depth 3).Replace('<', '<')
 $page = (& $read 'impostor.src.html').Replace('/*WORDS*/', $json)
 
-# The logo (logo.jpg) is used only for the app icons below
+# The logo (logo.jpg): the detective badge in the game and the app icons
 Add-Type -AssemblyName System.Drawing
 $logo = [Drawing.Image]::FromFile((Join-Path $root 'logo.jpg'))
 function Get-Jpeg([Drawing.Image]$img, [int]$w, [int]$h, [int]$sx, [int]$sy, [int]$sw, [int]$sh, [int]$canvas = 0, [Drawing.Color]$bg = [Drawing.Color]::Black) {
@@ -24,6 +24,14 @@ function Get-Jpeg([Drawing.Image]$img, [int]$w, [int]$h, [int]$sx, [int]$sy, [in
   $g.DrawImage($img, (New-Object Drawing.Rectangle ([int](($cw - $w) / 2)), ([int](($ch - $h) / 2)), $w, $h), $sx, $sy, $sw, $sh, [Drawing.GraphicsUnit]::Pixel)
   $g.Dispose(); return $bmp
 }
+# The detective from the logo, cropped round: the badge on the home screen, card back and join screens
+$em = Get-Jpeg $logo 300 300 235 80 1220 1220
+$codec = [Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+$ep = New-Object Drawing.Imaging.EncoderParameters 1
+$ep.Param[0] = New-Object Drawing.Imaging.EncoderParameter ([Drawing.Imaging.Encoder]::Quality), 85L
+$ms = New-Object IO.MemoryStream
+$em.Save($ms, $codec, $ep); $em.Dispose()
+$page = $page.Replace('EMBLEM_URL', 'data:image/jpeg;base64,' + [Convert]::ToBase64String($ms.ToArray()))
 [IO.File]::WriteAllText((Join-Path $root 'impostor.html'), $page, $enc)
 
 $site = if ($Out) { $Out } else { Join-Path $root 'site' }
@@ -32,37 +40,6 @@ $head = (& $read 'web\head.html').Replace('/*PEERDB*/', (& $read 'web\peerdb.js'
 $webPage = $page.Replace('<meta name="claude:viewport-fit-sides" content="cover">', '')
 [IO.File]::WriteAllText((Join-Path $site 'index.html'), $head + $webPage + (& $read 'web\foot.html'), $enc)
 
-# A design being tried out: preview\index.html = the same game with preview-theme.css on top (the real game is untouched)
-$themeFile = Join-Path $root 'preview-theme.css'
-if (Test-Path $themeFile) {
-  $theme = [IO.File]::ReadAllText($themeFile, [Text.Encoding]::UTF8)
-  $i = $webPage.IndexOf('</style>')
-  $pv = $webPage.Substring(0, $i) + "`n" + $theme + $webPage.Substring($i)
-  # the detective from the logo, cropped round, instead of the mask on the home screen
-  $em = Get-Jpeg $logo 300 300 235 80 1220 1220
-  $codec = [Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
-  $ep = New-Object Drawing.Imaging.EncoderParameters 1
-  $ep.Param[0] = New-Object Drawing.Imaging.EncoderParameter ([Drawing.Imaging.Encoder]::Quality), 85L
-  $ms = New-Object IO.MemoryStream
-  $em.Save($ms, $codec, $ep); $em.Dispose()
-  $heroOld = '<div class="hero">${MASK}<h1>'
-  if ($pv.IndexOf($heroOld) -lt 0) { throw 'home hero not found' }
-  $emUrl = 'data:image/jpeg;base64,' + [Convert]::ToBase64String($ms.ToArray())
-  $pv = $pv.Replace($heroOld, '<div class="hero"><img class="emblem" alt="" src="' + $emUrl + '"><h1>')
-  # every other mask (join, manager code, card back...) becomes the same detective badge, drawn by preview-theme.css
-  $pv = $pv.Replace('EMBLEM_URL', $emUrl)
-  $pv = [Regex]::Replace($pv, "const MASK = '<svg class=""mask""[^\n]*?</svg>';", "const MASK = '<span class=""mask badge"" aria-hidden=""true""></span>';")
-  if ($pv.IndexOf('class="mask badge"') -lt 0) { throw 'MASK not replaced' }
-  # the pink of the player stickers and the impostor's table row: the logo's red
-  $pv = $pv.Replace("['#E6007E','#FFFFFF']", "['#9333EA','#FFFFFF']").Replace('tr.is-imp td{background:#FFE3F2}', 'tr.is-imp td{background:#F3E8FF}')
-  # player sticker colors: cyan instead of yellow
-  $pv = $pv.Replace("['#FFD400','#1B0B3A']", "['#22D3EE','#1B0B3A']")
-  $pdir = Join-Path $site 'preview'
-  New-Item -ItemType Directory -Force $pdir | Out-Null
-  $pfoot = (& $read 'web\foot.html').Replace("navigator.serviceWorker.register('sw.js')", "navigator.serviceWorker.register('../sw.js')")
-  $phead = $head.Replace('content="#FFD400"', 'content="#07152F"').Replace('href="manifest.webmanifest"', 'href="../manifest.webmanifest"').Replace('href="icon-192.png', 'href="../icon-192.png').Replace('href="apple-touch-icon.png', 'href="../apple-touch-icon.png')
-  [IO.File]::WriteAllText((Join-Path $pdir 'index.html'), $phead + $pv + $pfoot, $enc)
-}
 Copy-Item (Join-Path $root 'web\manifest.webmanifest'), (Join-Path $root 'web\sw.js') $site -Force
 
 # App icons: the logo, cropped square (and with room around it for round/maskable icons)

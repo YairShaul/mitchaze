@@ -121,7 +121,7 @@ th,td{text-align:start;padding:10px 8px;border-bottom:2px solid #EEE8F7}
 th{font-size:.8rem;color:var(--ink-muted);font-weight:800}
 td.num,th.num{text-align:center}
 tr:last-child td{border-bottom:none}
-tr.is-imp td{background:#FFE3F2}
+tr.is-imp td{background:#F3E8FF}
 tr.is-imp td:first-child{font-weight:800;color:var(--pink)}
 .tablewrap{overflow-x:auto;border:3px solid var(--ink);border-radius:18px;box-shadow:var(--shadow)}
 .status{display:flex;flex-wrap:wrap;gap:6px}
@@ -145,6 +145,48 @@ details{background:var(--card);color:var(--ink);border:3px solid var(--ink);bord
 summary{cursor:pointer;font-weight:800}
 details ul{margin:10px 0 0;padding-inline-start:20px;display:flex;flex-direction:column;gap:6px}
 .countdown{font-family:var(--f-body);font-weight:900;font-variant-numeric:lining-nums tabular-nums;font-size:3.2rem;line-height:1;display:block}
+
+/* Detective night: the dark ground of the logo. The cards, buttons and avatars keep their colors.
+   Each scene keeps its own color, now as a glow on the dark ground: purple = lobby, violet = secret card,
+   mint = clue round, sky = voting/results. */
+:root{
+  --navy:#07152F; --cyan:#22D3EE; --red:#A855F7;
+  --pink:#9333EA; /* purple instead of pink, everywhere */
+  --sun:var(--cyan); /* every yellow accent (button text, code box, labels, confetti) becomes the logo's cyan */
+  --bg:var(--navy); --fg:#FFFFFF; --fg-muted:#A9BCDD;
+  --glow:var(--pink); --edge:var(--cyan);
+  --shadow:5px 5px 0 var(--edge);
+}
+html[data-scene="night"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#C9BDFF;--glow:var(--violet);--edge:var(--cyan)}
+html[data-scene="mint"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#9FE6DA;--glow:var(--mint);--edge:var(--mint)}
+html[data-scene="paper"]{--bg:var(--navy);--fg:#FFFFFF;--fg-muted:#A9BCDD;--glow:var(--sky);--edge:var(--sky)}
+html{background:var(--navy)}
+body{background:transparent;position:relative;min-height:100vh;min-height:100dvh}
+html::before,html::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:-1}
+/* the scene's color glows behind the radar */
+html::before{background:
+  radial-gradient(120% 70% at 50% 18%, color-mix(in srgb, var(--glow) 38%, transparent), transparent 62%),
+  radial-gradient(90% 60% at 50% 110%, color-mix(in srgb, var(--cyan) 18%, transparent), transparent 70%),
+  var(--navy);
+  transition:background .35s ease}
+/* radar rings, crosshair, fingerprints, magnifier, footprints */
+html::after{opacity:.55;background:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 860' preserveAspectRatio='xMidYMid slice'><g fill='none' stroke-linecap='round'><g stroke='%2322D3EE' stroke-opacity='.35'><circle cx='200' cy='300' r='150'/><circle cx='200' cy='300' r='210' stroke-dasharray='2 10'/><circle cx='200' cy='300' r='280' stroke-opacity='.18'/><path d='M200 40v80M200 480v120M-10 300h90M320 300h100' stroke-opacity='.4'/><path d='M200 300 L350 230' stroke-opacity='.5' stroke-width='2'/></g><g stroke='%23A855F7' stroke-opacity='.45' stroke-width='1.6'><circle cx='330' cy='90' r='12'/><path d='M330 70v12M330 98v12M310 90h12M338 90h12'/></g><g stroke='%2322D3EE' stroke-opacity='.4' stroke-width='5'><circle cx='70' cy='120' r='26'/><path d='M52 140 L20 176' stroke-width='9'/></g><g stroke='%23A855F7' stroke-opacity='.35' stroke-width='2'><path d='M330 560c-14 0-24 12-24 28v30'/><path d='M330 552c-20 0-32 16-32 36v34'/><path d='M330 544c-26 0-40 20-40 44v38'/><path d='M330 568c-8 0-14 8-14 20v26'/><path d='M330 560c14 0 24 12 24 28v24'/><path d='M330 552c20 0 32 16 32 36v20'/><path d='M330 544c26 0 40 20 40 44v14'/></g><g stroke='%2322D3EE' stroke-opacity='.28' stroke-width='2'><path d='M60 690c-14 0-24 12-24 28v30'/><path d='M60 682c-20 0-32 16-32 36v34'/><path d='M60 674c-26 0-40 20-40 44v38'/><path d='M60 690c14 0 24 12 24 28v24'/><path d='M60 682c20 0 32 16 32 36v20'/></g></g><g fill='%23A855F7' fill-opacity='.28'><ellipse cx='40' cy='420' rx='9' ry='15' transform='rotate(-12 40 420)'/><ellipse cx='37' cy='442' rx='6' ry='6'/><ellipse cx='70' cy='380' rx='9' ry='15' transform='rotate(-12 70 380)'/><ellipse cx='67' cy='402' rx='6' ry='6'/></g><g fill='%2322D3EE' fill-opacity='.4'><rect x='300' y='160' width='10' height='6'/><rect x='316' y='178' width='18' height='4'/><rect x='84' y='250' width='6' height='18'/><rect x='96' y='262' width='14' height='4'/><rect x='290' y='420' width='6' height='6'/><rect x='120' y='520' width='16' height='4'/></g><g fill='%23A855F7' fill-opacity='.4'><rect x='110' y='210' width='8' height='8'/><rect x='280' y='370' width='12' height='4'/><rect x='170' y='780' width='10' height='4'/></g><text x='350' y='800' font-family='Arial' font-weight='700' font-size='54' fill='%23A855F7' fill-opacity='.28'>?</text><text x='240' y='660' font-family='Arial' font-weight='700' font-size='30' fill='%2322D3EE' fill-opacity='.22'>?</text></svg>") center/cover no-repeat}
+/* the cards stay bright and get a colored outline glow instead of the dark shadow that vanished on night */
+.choice:hover{box-shadow:7px 7px 0 var(--edge)}
+.choice:active{box-shadow:2px 2px 0 var(--edge)}
+.btn{box-shadow:0 0 0 2px color-mix(in srgb, var(--edge) 55%, transparent)}
+.btn.ghost{box-shadow:none}
+.secret{box-shadow:8px 8px 0 var(--edge)}
+h1,h2{text-shadow:3px 3px 0 color-mix(in srgb, var(--glow) 70%, transparent)}
+@media (prefers-reduced-motion:reduce){html::before{transition:none}}
+/* home screen: the detective from the logo instead of the mask */
+.emblem{width:148px;height:148px;border-radius:50%;object-fit:cover;border:3px solid var(--cyan);box-shadow:0 0 0 5px var(--navy),0 0 0 7px color-mix(in srgb, var(--red) 70%, transparent),0 0 36px color-mix(in srgb, var(--cyan) 45%, transparent)}
+input[type=text],input[type=tel]{background:#F2F7FF}
+/* the detective badge that replaces the mask everywhere else */
+.mask.badge{display:block;width:96px;height:96px;flex:none;border-radius:50%;background:var(--navy) url("EMBLEM_URL") center/cover no-repeat;border:3px solid var(--cyan);box-shadow:0 0 0 4px var(--navy),0 0 0 6px color-mix(in srgb, var(--red) 70%, transparent),0 0 26px color-mix(in srgb, var(--cyan) 40%, transparent);filter:none}
+/* the back of the secret card: dark like the logo, cyan dots, red edge */
+.secret.back{background-color:#0F2350;border-color:var(--cyan);box-shadow:8px 8px 0 var(--red),0 0 30px color-mix(in srgb, var(--cyan) 30%, transparent);background-image:radial-gradient(circle at 12px 12px,rgba(34,211,238,.22) 3px,transparent 4px)}
+.secret.back .mask.badge{width:116px;height:116px}
 </style>
 
 <div id="app" dir="rtl" lang="he"></div>
@@ -163,10 +205,10 @@ const CATS = [];
 const CAT_COUNT = {};
 WORDS.forEach(w => { if (!(w[2] in CAT_COUNT)) { CATS.push(w[2]); CAT_COUNT[w[2]] = 0; } CAT_COUNT[w[2]]++; });
 
-const MASK = '<svg class="mask" viewBox="0 0 64 34" aria-hidden="true"><path fill="currentColor" d="M3 7c9-5 19-4 29 3 10-7 20-8 29-3 2 11-2 21-12 23-8 1-13-3-17-8-4 5-9 9-17 8C5 28 1 18 3 7z"/><ellipse class="hole" cx="19" cy="16" rx="6.5" ry="4.2"/><ellipse class="hole" cx="45" cy="16" rx="6.5" ry="4.2"/></svg>';
+const MASK = '<span class="mask badge" aria-hidden="true"></span>';
 
 const CONFETTI = '<span class="confetti" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>';
-const PCOL = [['#FFD400','#1B0B3A'],['#E6007E','#FFFFFF'],['#00C2A8','#1B0B3A'],['#5B2EFF','#FFFFFF'],['#FF7A00','#1B0B3A'],['#3DA9FC','#1B0B3A']];
+const PCOL = [['#22D3EE','#1B0B3A'],['#9333EA','#FFFFFF'],['#00C2A8','#1B0B3A'],['#5B2EFF','#FFFFFF'],['#FF7A00','#1B0B3A'],['#3DA9FC','#1B0B3A']];
 function av(g, p){
   const c = PCOL[Math.max(0, g.players.indexOf(p)) % PCOL.length];
   return `<span class="av" style="--pc:${c[0]};--pt:${c[1]}" aria-hidden="true">${esc(Array.from(p)[0] || '?')}</span>`;
@@ -373,7 +415,7 @@ function vHome(){
     : '<p class="muted small">כדי להצטרף למשחק מהטלפון שלך צריך לפתוח את העמוד כשמחוברים לחשבון claude.ai.</p>');
   else join = '<button class="choice" data-a="online-join"><b>הצטרפות למשחק</b><span class="muted small">המנהל פתח משחק? הקלידו את הקוד שמופיע אצלו.</span></button>';
   return `
-  <div class="hero">${MASK}<h1>מתחזה</h1><p class="muted">כולם יודעים את המילה. חוץ מאחד.</p></div>
+  <div class="hero"><img class="emblem" alt="" src="EMBLEM_URL"><h1>מתחזה</h1><p class="muted">כולם יודעים את המילה. חוץ מאחד.</p></div>
   <div class="panel">
     <label for="myname" style="font-weight:800">איך קוראים לך?</label>
     <input type="text" id="myname" data-in="myname" value="${esc(S.myNameInput)}" placeholder="השם שלך במשחק" maxlength="20" autocomplete="nickname">
